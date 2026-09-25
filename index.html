@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>業績管理アプリ</title>
+<meta name="description" content="論文・学会発表・講義などの業績を登録し、業績目録として出力する管理アプリ。">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+
+<header class="titlebar">
+  <h1>業績管理アプリ</h1>
+  <span class="save-state" id="save-state">—</span>
+</header>
+
+<div class="app">
+  <div class="nb">
+    <div class="nb-tabs" role="tablist">
+      <button class="nb-tab active" role="tab" data-page="entry">業績の入力</button>
+      <button class="nb-tab" role="tab" data-page="list">業績一覧</button>
+      <button class="nb-tab" role="tab" data-page="output">業績リスト出力</button>
+      <button class="nb-tab" role="tab" data-page="yearly">年度別集計</button>
+      <button class="nb-tab" role="tab" data-page="master">マスタ管理</button>
+      <button class="nb-tab" role="tab" data-page="data">データ入出力</button>
+    </div>
+
+    <!-- ════════ 業績の入力 ════════ -->
+    <section class="nb-page" id="page-entry">
+      <fieldset class="lf">
+        <legend>業績区分</legend>
+        <div class="grid">
+          <label>区分:<select id="f-category"></select></label>
+          <span class="kind-badge" id="f-kind">—</span>
+          <span class="flex-sp"></span>
+          <span class="edit-state hidden" id="f-editing">編集中</span>
+          <button type="button" id="f-new" class="ghost">新規入力に戻す</button>
+        </div>
+      </fieldset>
+
+      <fieldset class="lf">
+        <legend>共著者と所属</legend>
+        <div id="f-authors" class="authors"></div>
+        <div class="grid">
+          <button type="button" id="f-add-author" class="mini">＋ 著者を追加</button>
+          <button type="button" id="f-add-self" class="mini">＋ 自分を先頭に追加</button>
+          <span class="hint-inline">氏名・所属は入力欄で選択するか、直接入力すると次回から候補に出ます。</span>
+        </div>
+      </fieldset>
+
+      <!-- 論文用 -->
+      <fieldset class="lf kind-paper">
+        <legend>論文情報</legend>
+        <div class="grid">
+          <label class="wide">論文タイトル:<input type="text" id="f-title-paper" size="60"></label>
+        </div>
+        <div class="grid">
+          <label>ジャーナル名:<input type="text" id="f-journal" list="dl-journals" size="30"></label>
+          <label>略称:<input type="text" id="f-journal-abbr" size="16"></label>
+          <span class="hint-inline">初めて入力したジャーナルと略称は自動で記憶されます。</span>
+        </div>
+        <div class="grid">
+          <label>発表年:<input type="text" id="f-year-paper" size="6" placeholder="2024"></label>
+          <label>月:<input type="text" id="f-month-paper" size="4"></label>
+          <label>日:<input type="text" id="f-day-paper" size="4"></label>
+          <label>巻（創刊号）:<input type="text" id="f-volume" size="6"></label>
+          <label>号:<input type="text" id="f-issue" size="6"></label>
+          <label>ページ / 文献番号:<input type="text" id="f-pages" size="14" placeholder="23465 または 60-65"></label>
+        </div>
+        <div class="grid">
+          <label class="chk"><input type="checkbox" id="f-reviewed" checked> 査読あり</label>
+          <label>DOI:<input type="text" id="f-doi" size="30" placeholder="10.1038/s41598-024-xxxxx"></label>
+        </div>
+      </fieldset>
+
+      <fieldset class="lf doi-box kind-paper">
+        <legend>DOI から書誌情報を取得（CrossRef）</legend>
+        <div class="grid">
+          <label class="wide">DOI:<input type="text" id="f-doi-fetch" size="44"
+            placeholder="10.1038/s41598-024-74596-x　または https://doi.org/..."></label>
+          <button type="button" id="f-doi-go" class="accent">取得して入力欄に反映</button>
+          <label class="chk"><input type="checkbox" id="f-doi-authors" checked> 著者も上書きする</label>
+          <span class="doi-state" id="f-doi-state"></span>
+        </div>
+        <p class="hint">タイトル・ジャーナル名・略称・年月・巻号・ページを自動で入力します。
+          取得後は通常どおり手直しできます。著者は「姓, 名」の形式で入り、マスタにも記憶されます。</p>
+      </fieldset>
+
+      <!-- 学会用 -->
+      <fieldset class="lf kind-conference hidden">
+        <legend>学会発表情報</legend>
+        <div class="grid">
+          <label class="wide">発表タイトル:<input type="text" id="f-title-conf" size="60"></label>
+        </div>
+        <div class="grid">
+          <label>大会名:<input type="text" id="f-conference" list="dl-conferences" size="34"></label>
+          <label>会場（任意）:<input type="text" id="f-venue-conf" size="18"></label>
+        </div>
+        <div class="grid">
+          <label>発表年:<input type="text" id="f-year-conf" size="6" placeholder="2025"></label>
+          <label>月:<input type="text" id="f-month-conf" size="4"></label>
+          <label>日:<input type="text" id="f-day-conf" size="4"></label>
+          <label>発表番号:<input type="text" id="f-number" size="14" placeholder="I01-01"></label>
+        </div>
+      </fieldset>
+
+      <!-- その他 -->
+      <fieldset class="lf kind-other hidden">
+        <legend>その他の業績情報</legend>
+        <div class="grid">
+          <label class="wide">件名・タイトル:<input type="text" id="f-title-other" size="60"></label>
+        </div>
+        <div class="grid">
+          <label>名称（講義名・事業名・大会名など）:<input type="text" id="f-conference-other" list="dl-conferences" size="34"></label>
+          <label>会場・実施場所:<input type="text" id="f-venue-other" size="18"></label>
+        </div>
+        <div class="grid">
+          <label>年:<input type="text" id="f-year-other" size="6"></label>
+          <label>月:<input type="text" id="f-month-other" size="4"></label>
+          <label>日:<input type="text" id="f-day-other" size="4"></label>
+        </div>
+        <div class="grid">
+          <label class="wide">備考（担当内容・回数など）:<input type="text" id="f-note" size="60"></label>
+        </div>
+      </fieldset>
+
+      <div class="btnbar">
+        <button type="button" id="f-save" class="primary">この内容で登録</button>
+        <button type="button" id="f-clear">入力をクリア</button>
+        <span class="vsep"></span>
+        <button type="button" id="f-demo" class="ghost">サンプル入力</button>
+      </div>
+
+      <fieldset class="lf preview-box">
+        <legend>出力プレビュー</legend>
+        <div class="preview" id="f-preview">（入力すると、ここに業績リストでの表示が出ます）</div>
+      </fieldset>
+    </section>
+
+    <!-- ════════ 業績一覧 ════════ -->
+    <section class="nb-page hidden" id="page-list">
+      <fieldset class="lf">
+        <legend>絞り込み・並べ替え</legend>
+        <div class="grid">
+          <label>区分:<select id="l-category"><option value="">すべて</option></select></label>
+          <label>キーワード:<input type="text" id="l-search" size="24" placeholder="タイトル・著者・雑誌名"></label>
+          <label>並び順:<select id="l-order">
+            <option value="desc">新しい順</option>
+            <option value="asc">古い順</option>
+          </select></label>
+          <span class="flex-sp"></span>
+          <span class="count-badge" id="l-count">0 件</span>
+        </div>
+      </fieldset>
+      <div class="table-wrap"><table class="tbl" id="l-table">
+        <thead><tr>
+          <th>#</th><th>区分</th><th>年月日</th><th class="w-title">タイトル</th>
+          <th>掲載誌 / 大会</th><th>著者</th><th>操作</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table></div>
+    </section>
+
+    <!-- ════════ 業績リスト出力 ════════ -->
+    <section class="nb-page hidden" id="page-output">
+      <fieldset class="lf">
+        <legend>出力設定</legend>
+        <div class="grid">
+          <label class="wide">表題:<input type="text" id="o-title" size="40"></label>
+          <label>並び順:<select id="o-order">
+            <option value="asc">古い順</option>
+            <option value="desc">新しい順</option>
+          </select></label>
+        </div>
+        <div class="grid">
+          <span class="lbl">出力する区分:</span>
+          <div id="o-categories" class="cat-checks"></div>
+        </div>
+        <div class="grid">
+          <button type="button" id="o-all-on" class="mini">全選択</button>
+          <button type="button" id="o-all-off" class="mini">全解除</button>
+        </div>
+      </fieldset>
+
+      <div class="btnbar">
+        <button type="button" id="o-refresh" class="primary">プレビュー更新</button>
+        <span class="vsep"></span>
+        <button type="button" id="o-html">HTML（Word貼付用）</button>
+        <button type="button" id="o-md">Markdown</button>
+        <button type="button" id="o-txt">テキスト</button>
+        <button type="button" id="o-csv">CSV（Excel）</button>
+        <span class="vsep"></span>
+        <button type="button" id="o-bib">BibTeX</button>
+        <button type="button" id="o-ris">RIS</button>
+        <button type="button" id="o-kakenhi" class="accent">科研費様式</button>
+        <span class="vsep"></span>
+        <button type="button" id="o-copy">プレビューをコピー</button>
+        <button type="button" id="o-print" class="accent">印刷 / PDF</button>
+      </div>
+
+      <div class="output-view" id="o-preview"></div>
+    </section>
+
+    <!-- ════════ 年度別集計 ════════ -->
+    <section class="nb-page hidden" id="page-yearly">
+      <fieldset class="lf">
+        <legend>集計設定</legend>
+        <div class="grid">
+          <label>集計単位:<select id="y-basis">
+            <option value="fiscal">年度（4月〜翌3月）</option>
+            <option value="calendar">暦年（1月〜12月）</option>
+          </select></label>
+          <span class="flex-sp"></span>
+          <button type="button" id="y-csv">集計表をCSV出力</button>
+        </div>
+        <p class="hint">年度は日本の会計年度（4月1日〜翌年3月31日）で集計します。
+          月が未入力の業績は、その年の年度として扱います。</p>
+      </fieldset>
+
+      <div class="yearly-summary" id="y-summary"></div>
+
+      <fieldset class="lf">
+        <legend>年度別の推移</legend>
+        <div class="yearly-chart" id="y-chart"></div>
+      </fieldset>
+
+      <div class="table-wrap"><table class="tbl" id="y-table">
+        <thead></thead><tbody></tbody>
+      </table></div>
+    </section>
+
+    <!-- ════════ マスタ管理 ════════ -->
+    <section class="nb-page hidden" id="page-master">
+      <fieldset class="lf">
+        <legend>自分の氏名表記（出力時に太字＋下線になります）</legend>
+        <div class="grid">
+          <label class="wide">表記（改行区切り・別名も登録可）:
+            <textarea id="m-selfnames" rows="3" spellcheck="false"></textarea>
+          </label>
+          <button type="button" id="m-save-self" class="mini">保存</button>
+        </div>
+      </fieldset>
+
+      <div class="master-cols">
+        <fieldset class="lf">
+          <legend>共著者</legend>
+          <div class="grid">
+            <label>氏名:<input type="text" id="m-person-name" size="14"></label>
+            <label>英語表記:<input type="text" id="m-person-en" size="14" placeholder="Gibu, K."></label>
+            <label>既定の所属:<select id="m-person-aff"></select></label>
+            <button type="button" id="m-person-add" class="mini">追加 / 更新</button>
+          </div>
+          <div class="table-wrap short"><table class="tbl" id="m-person-table">
+            <thead><tr><th>氏名</th><th>英語表記</th><th>既定の所属</th><th>使用</th><th>操作</th></tr></thead>
+            <tbody></tbody>
+          </table></div>
+        </fieldset>
+
+        <fieldset class="lf">
+          <legend>所属</legend>
+          <div class="grid">
+            <label>名称:<input type="text" id="m-aff-name" size="18"></label>
+            <label>略称:<input type="text" id="m-aff-short" size="12" placeholder="産総研"></label>
+            <button type="button" id="m-aff-add" class="mini">追加 / 更新</button>
+          </div>
+          <div class="table-wrap short"><table class="tbl" id="m-aff-table">
+            <thead><tr><th>名称</th><th>略称</th><th>使用</th><th>操作</th></tr></thead>
+            <tbody></tbody>
+          </table></div>
+        </fieldset>
+
+        <fieldset class="lf">
+          <legend>ジャーナル</legend>
+          <div class="grid">
+            <label>名称:<input type="text" id="m-jnl-name" size="20"></label>
+            <label>略称:<input type="text" id="m-jnl-abbr" size="12" placeholder="Sci Rep"></label>
+            <button type="button" id="m-jnl-add" class="mini">追加 / 更新</button>
+          </div>
+          <div class="table-wrap short"><table class="tbl" id="m-jnl-table">
+            <thead><tr><th>名称</th><th>略称</th><th>使用</th><th>操作</th></tr></thead>
+            <tbody></tbody>
+          </table></div>
+        </fieldset>
+
+        <fieldset class="lf">
+          <legend>大会・講義名</legend>
+          <div class="grid">
+            <label>名称:<input type="text" id="m-cnf-name" size="26"></label>
+            <button type="button" id="m-cnf-add" class="mini">追加 / 更新</button>
+          </div>
+          <div class="table-wrap short"><table class="tbl" id="m-cnf-table">
+            <thead><tr><th>名称</th><th>使用</th><th>操作</th></tr></thead>
+            <tbody></tbody>
+          </table></div>
+        </fieldset>
+      </div>
+    </section>
+
+    <!-- ════════ データ入出力 ════════ -->
+    <section class="nb-page hidden" id="page-data">
+      <fieldset class="lf">
+        <legend>バックアップ（アプリ更新時の引き継ぎ用）</legend>
+        <p class="hint">登録した業績とマスタをまとめて JSON ファイルに保存します。
+          アプリを更新したあとにこのファイルを読み込めば、これまでの入力内容をそのまま復元できます。</p>
+        <div class="btnbar">
+          <button type="button" id="d-export" class="primary">JSONファイルに保存</button>
+          <span class="vsep"></span>
+          <label class="file-btn">JSONファイルを読み込む<input type="file" id="d-import" accept=".json,application/json"></label>
+          <label>読み込み方法:<select id="d-import-mode">
+            <option value="merge">既存データに追加（重複は除外）</option>
+            <option value="replace">すべて置き換える</option>
+          </select></label>
+        </div>
+      </fieldset>
+
+      <fieldset class="lf">
+        <legend>登録状況</legend>
+        <div class="stats" id="d-stats"></div>
+      </fieldset>
+
+      <fieldset class="lf danger-box">
+        <legend>データの初期化</legend>
+        <p class="hint">この操作は取り消せません。実行前に必ず JSON バックアップを保存してください。</p>
+        <button type="button" id="d-reset" class="danger">すべてのデータを削除する</button>
+      </fieldset>
+    </section>
+  </div>
+</div>
+
+<div class="statusbar" id="statusbar">準備完了</div>
+
+<datalist id="dl-persons"></datalist>
+<datalist id="dl-affiliations"></datalist>
+<datalist id="dl-journals"></datalist>
+<datalist id="dl-conferences"></datalist>
+
+<dialog id="dlg-msg">
+  <h2 id="msg-title"></h2>
+  <p id="msg-body"></p>
+  <div class="dlg-btns">
+    <button type="button" id="msg-ok" class="primary">OK</button>
+    <button type="button" id="msg-cancel" class="hidden">キャンセル</button>
+  </div>
+</dialog>
+
+<script type="module" src="src/app.js"></script>
+</body>
+</html>

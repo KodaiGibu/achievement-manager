@@ -1,0 +1,12 @@
+{
+  "name": "achievement-manager",
+  "version": "1.0.0",
+  "private": true,
+  "description": "論文・学会発表・講義などの業績を登録し、業績目録として出力する管理アプリ",
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/app.test.mjs",
+    "dev": "npx --yes serve ."
+  },
+  "license": "MIT"
+}
