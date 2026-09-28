@@ -2,7 +2,7 @@
  * 業績管理アプリ — DOI から書誌情報を取得（CrossRef REST API）
  *
  * 参考: https://api.crossref.org/  （/works/{doi} で 1 件のメタデータを取得）
- * 利用時は mailto を付けた "polite pool" を使う（推奨されている作法）。
+ * mailto を付けた "polite pool" の利用にも対応する。
  */
 
 export const CROSSREF_BASE = 'https://api.crossref.org/works/';
@@ -10,8 +10,6 @@ export const CROSSREF_BASE = 'https://api.crossref.org/works/';
 /**
  * 入力された DOI 文字列を正規化する。
  * URL 形式（https://doi.org/10.xxxx/yyyy）や "doi:" 接頭辞も受け付ける。
- * @returns {string} 正規化された DOI（例: 10.1038/s41598-024-74596-x）
- * @throws {Error} DOI として解釈できない場合
  */
 export function normalizeDoi(input) {
   let s = String(input ?? '').trim();
@@ -33,11 +31,7 @@ export function doiUrl(doi) {
   return `https://doi.org/${d}`;
 }
 
-/**
- * CrossRef の 1 件分メタデータ（message）を、アプリの業績フィールドへ変換する。
- * @param {object} msg CrossRef の message オブジェクト
- * @returns {{title,journal,journalAbbr,year,month,day,volume,issue,pages,doi,publisher,type,authors}}
- */
+/** CrossRef の message オブジェクトを、アプリの業績フィールドへ変換する */
 export function mapCrossrefMessage(msg) {
   if (!msg || typeof msg !== 'object') throw new Error('書誌情報を読み取れませんでした。');
 
@@ -64,7 +58,6 @@ export function mapCrossrefMessage(msg) {
       name,
       family,
       given,
-      // 所属は配列で入ることがある（先頭のみ採用）
       affiliation: String(a.affiliation?.[0]?.name ?? '').trim(),
     };
   }).filter((a) => a.name !== '');
@@ -88,9 +81,7 @@ export function mapCrossrefMessage(msg) {
 
 /**
  * DOI から書誌情報を取得する。
- * @param {string} doiInput DOI（URL 形式も可）
  * @param {{mailto?:string, fetchImpl?:Function, signal?:AbortSignal}} opts
- * @returns {Promise<object>} mapCrossrefMessage の戻り値
  */
 export async function fetchByDoi(doiInput, opts = {}) {
   const doi = normalizeDoi(doiInput);
@@ -102,11 +93,8 @@ export async function fetchByDoi(doiInput, opts = {}) {
 
   let res;
   try {
-    res = await fetchImpl(url, {
-      headers: { Accept: 'application/json' },
-      signal: opts.signal,
-    });
-  } catch (e) {
+    res = await fetchImpl(url, { headers: { Accept: 'application/json' }, signal: opts.signal });
+  } catch {
     throw new Error('CrossRef に接続できませんでした。ネットワーク接続を確認してください。');
   }
   if (res.status === 404) throw new Error(`この DOI は CrossRef に登録されていません（${doi}）。`);

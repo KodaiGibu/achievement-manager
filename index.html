@@ -39,14 +39,30 @@
         </div>
       </fieldset>
 
+      <fieldset class="lf doi-box kind-paper">
+        <legend>DOI から書誌情報を取得（CrossRef）</legend>
+        <div class="grid">
+          <label class="wide">DOI:<input type="text" id="f-doi-fetch" size="44"
+            placeholder="10.1038/s41598-024-74596-x　または https://doi.org/..."></label>
+          <button type="button" id="f-doi-go" class="accent">取得して入力欄に反映</button>
+          <label class="chk"><input type="checkbox" id="f-doi-authors" checked> 著者も上書きする</label>
+          <span class="doi-state" id="f-doi-state"></span>
+        </div>
+        <p class="hint">タイトル・ジャーナル名・略称・年月・巻号・ページを自動で入力します。
+          取得後は通常どおり手直しできます。</p>
+      </fieldset>
+
       <fieldset class="lf">
         <legend>共著者と所属</legend>
         <div id="f-authors" class="authors"></div>
         <div class="grid">
           <button type="button" id="f-add-author" class="mini">＋ 著者を追加</button>
           <button type="button" id="f-add-self" class="mini">＋ 自分を先頭に追加</button>
-          <span class="hint-inline">氏名・所属は入力欄で選択するか、直接入力すると次回から候補に出ます。</span>
         </div>
+        <p class="hint">所属は著者ごとに1件ずつ登録します。<b>過去の所属から選択</b>するか、
+          <b>新しい所属</b>の名称と略称を入力して「登録して追加」を押してください。
+          新しく登録した所属と略称は記憶され、次回から選択肢に表示されます（出力では略称が優先されます）。
+          一度入力した氏名を選ぶと、前回の所属が自動で入ります。</p>
       </fieldset>
 
       <!-- 論文用 -->
@@ -70,21 +86,8 @@
         </div>
         <div class="grid">
           <label class="chk"><input type="checkbox" id="f-reviewed" checked> 査読あり</label>
-          <label>DOI:<input type="text" id="f-doi" size="30" placeholder="10.1038/s41598-024-xxxxx"></label>
+          <label>DOI:<input type="text" id="f-doi" size="30" placeholder="10.1038/s41598-024-74596-x"></label>
         </div>
-      </fieldset>
-
-      <fieldset class="lf doi-box kind-paper">
-        <legend>DOI から書誌情報を取得（CrossRef）</legend>
-        <div class="grid">
-          <label class="wide">DOI:<input type="text" id="f-doi-fetch" size="44"
-            placeholder="10.1038/s41598-024-74596-x　または https://doi.org/..."></label>
-          <button type="button" id="f-doi-go" class="accent">取得して入力欄に反映</button>
-          <label class="chk"><input type="checkbox" id="f-doi-authors" checked> 著者も上書きする</label>
-          <span class="doi-state" id="f-doi-state"></span>
-        </div>
-        <p class="hint">タイトル・ジャーナル名・略称・年月・巻号・ページを自動で入力します。
-          取得後は通常どおり手直しできます。著者は「姓, 名」の形式で入り、マスタにも記憶されます。</p>
       </fieldset>
 
       <!-- 学会用 -->
@@ -144,7 +147,7 @@
         <legend>絞り込み・並べ替え</legend>
         <div class="grid">
           <label>区分:<select id="l-category"><option value="">すべて</option></select></label>
-          <label>キーワード:<input type="text" id="l-search" size="24" placeholder="タイトル・著者・雑誌名"></label>
+          <label>キーワード:<input type="text" id="l-search" size="24" placeholder="タイトル・著者・所属・雑誌名"></label>
           <label>並び順:<select id="l-order">
             <option value="desc">新しい順</option>
             <option value="asc">古い順</option>
@@ -244,28 +247,39 @@
 
       <div class="master-cols">
         <fieldset class="lf">
-          <legend>共著者</legend>
+          <legend>所属</legend>
           <div class="grid">
-            <label>氏名:<input type="text" id="m-person-name" size="14"></label>
-            <label>英語表記:<input type="text" id="m-person-en" size="14" placeholder="Gibu, K."></label>
-            <label>既定の所属:<select id="m-person-aff"></select></label>
-            <button type="button" id="m-person-add" class="mini">追加 / 更新</button>
+            <label>名称:<input type="text" id="m-aff-name" size="22" placeholder="産業技術総合研究所"></label>
+            <label>略称:<input type="text" id="m-aff-short" size="12" placeholder="産総研"></label>
+            <button type="button" id="m-aff-add" class="mini">追加</button>
+            <button type="button" id="m-aff-cancel" class="mini hidden">編集をやめる</button>
+            <span class="edit-state hidden" id="m-aff-editing">編集中</span>
           </div>
-          <div class="table-wrap short"><table class="tbl" id="m-person-table">
-            <thead><tr><th>氏名</th><th>英語表記</th><th>既定の所属</th><th>使用</th><th>操作</th></tr></thead>
+          <p class="hint">名称を変更すると、その所属を使っているすべての業績の出力に反映されます。</p>
+          <div class="table-wrap short"><table class="tbl" id="m-aff-table">
+            <thead><tr><th>名称</th><th>略称</th><th>使用</th><th>操作</th></tr></thead>
             <tbody></tbody>
           </table></div>
         </fieldset>
 
         <fieldset class="lf">
-          <legend>所属</legend>
+          <legend>共著者</legend>
           <div class="grid">
-            <label>名称:<input type="text" id="m-aff-name" size="18"></label>
-            <label>略称:<input type="text" id="m-aff-short" size="12" placeholder="産総研"></label>
-            <button type="button" id="m-aff-add" class="mini">追加 / 更新</button>
+            <label>氏名:<input type="text" id="m-person-name" size="14"></label>
+            <label>英語表記:<input type="text" id="m-person-en" size="14" placeholder="Gibu, K."></label>
           </div>
-          <div class="table-wrap short"><table class="tbl" id="m-aff-table">
-            <thead><tr><th>名称</th><th>略称</th><th>使用</th><th>操作</th></tr></thead>
+          <div class="grid">
+            <label class="wide">既定の所属（複数選択可・Ctrl / ⌘ キー）:
+              <select id="m-person-aff" multiple size="4"></select>
+            </label>
+          </div>
+          <div class="grid">
+            <button type="button" id="m-person-add" class="mini">追加</button>
+            <button type="button" id="m-person-cancel" class="mini hidden">編集をやめる</button>
+            <span class="edit-state hidden" id="m-person-editing">編集中</span>
+          </div>
+          <div class="table-wrap short"><table class="tbl" id="m-person-table">
+            <thead><tr><th>氏名</th><th>英語表記</th><th>既定の所属</th><th>使用</th><th>操作</th></tr></thead>
             <tbody></tbody>
           </table></div>
         </fieldset>
@@ -275,7 +289,9 @@
           <div class="grid">
             <label>名称:<input type="text" id="m-jnl-name" size="20"></label>
             <label>略称:<input type="text" id="m-jnl-abbr" size="12" placeholder="Sci Rep"></label>
-            <button type="button" id="m-jnl-add" class="mini">追加 / 更新</button>
+            <button type="button" id="m-jnl-add" class="mini">追加</button>
+            <button type="button" id="m-jnl-cancel" class="mini hidden">編集をやめる</button>
+            <span class="edit-state hidden" id="m-jnl-editing">編集中</span>
           </div>
           <div class="table-wrap short"><table class="tbl" id="m-jnl-table">
             <thead><tr><th>名称</th><th>略称</th><th>使用</th><th>操作</th></tr></thead>
@@ -287,7 +303,9 @@
           <legend>大会・講義名</legend>
           <div class="grid">
             <label>名称:<input type="text" id="m-cnf-name" size="26"></label>
-            <button type="button" id="m-cnf-add" class="mini">追加 / 更新</button>
+            <button type="button" id="m-cnf-add" class="mini">追加</button>
+            <button type="button" id="m-cnf-cancel" class="mini hidden">編集をやめる</button>
+            <span class="edit-state hidden" id="m-cnf-editing">編集中</span>
           </div>
           <div class="table-wrap short"><table class="tbl" id="m-cnf-table">
             <thead><tr><th>名称</th><th>使用</th><th>操作</th></tr></thead>
