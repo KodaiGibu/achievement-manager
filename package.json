@@ -1,8 +1,8 @@
 {
   "name": "achievement-manager",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "private": true,
-  "description": "論文・学会発表・講義などの業績を登録し、業績目録として出力する管理アプリ（和文・英文表記対応）",
+  "description": "論文・学会発表・講義などの業績を登録し、業績目録として出力する管理アプリ（階層所属・和文英文表記対応）",
   "type": "module",
   "scripts": {
     "test": "node --test tests/app.test.mjs",

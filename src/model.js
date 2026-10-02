@@ -6,15 +6,14 @@
  */
 
 export const APP_TITLE = '業績管理アプリ';
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 export const STORAGE_KEY = 'achievement_db_v1';
+
+/** 所属の階層の最大の深さ（循環参照の保護にも使う） */
+export const MAX_AFF_DEPTH = 8;
 
 // ══ 業績区分 ══
 
-/**
- * kind: 入力フォームの種類（paper / conference / other）
- * scope: international の区分は既定で英語表記になる
- */
 export const CATEGORIES = [
   { id: 'journal_reviewed', kind: 'paper', label: '学術雑誌等に発表した論文［査読有］', reviewed: true },
   { id: 'journal_unreviewed', kind: 'paper', label: '学術雑誌等に発表した論文［査読無］', reviewed: false },
@@ -31,16 +30,15 @@ export const CATEGORIES = [
 
 export const CATEGORY_MAP = Object.fromEntries(CATEGORIES.map((c) => [c.id, c]));
 
-/** 区分 ID から入力フォームの種類を返す */
 export function kindOf(categoryId) {
   return CATEGORY_MAP[categoryId]?.kind ?? 'other';
 }
 
-/** 表記言語の選択肢 */
-export const LANG_OPTIONS = [
-  { value: 'auto', label: '自動判定' },
-  { value: 'ja', label: '日本語表記' },
-  { value: 'en', label: '英語表記' },
+/** 出力時の所属の階層の表し方 */
+export const AFF_DISPLAY_OPTIONS = [
+  { value: 'full', label: 'すべての階層（機関＋学部・専攻・部門）' },
+  { value: 'top', label: '最上位（機関名）のみ' },
+  { value: 'leaf', label: '登録した階層のみ（最下位）' },
 ];
 
 // ══ 既定のデータベース ══
@@ -49,17 +47,17 @@ export function emptyDb() {
   return {
     schemaVersion: SCHEMA_VERSION,
     profile: {
-      // 出力時に太字＋下線を付ける自分の表記（和文・英文の両方を登録）
       selfNames: ['儀武滉大', '儀武 滉大', 'Gibu, K.', 'Gibu K', 'Kodai Gibu', 'Gibu, Kodai'],
+      affDisplay: 'full',
     },
     masters: {
       /** {id, name, nameEn, affiliationIds:[]} */
       persons: [],
-      /** {id, name, shortName, nameEn, shortNameEn} */
+      /** {id, name, shortName, nameEn, shortNameEn, parentId} — parentId で階層を表す */
       affiliations: [],
       /** {id, name, abbr} */
       journals: [],
-      /** {id, name} 大会名・講義名 */
+      /** {id, name} */
       conferences: [],
     },
     achievements: [],
@@ -67,7 +65,6 @@ export function emptyDb() {
   };
 }
 
-// ══ ID 採番 ══
 let seq = 0;
 export function newId(prefix = 'id') {
   seq += 1;
@@ -76,11 +73,6 @@ export function newId(prefix = 'id') {
 
 // ══ 業績レコードの雛形 ══
 
-/**
- * 共著者エントリ: { personId, freeName, freeNameEn, affiliationIds: [], freeAffiliation }
- *  - affiliationIds: 所属マスタの ID の配列（並び順がそのまま出力順）
- *  - freeAffiliation: 旧バージョンの「・」区切り文字列（移行処理でマスタへ変換される）
- */
 export function emptyAuthor() {
   return { personId: '', freeName: '', freeNameEn: '', affiliationIds: [], freeAffiliation: '' };
 }
@@ -89,9 +81,8 @@ export function emptyAchievement(categoryId = 'journal_reviewed') {
   return {
     id: newId('ach'),
     categoryId,
-    lang: 'auto',            // 表記言語: auto / ja / en
+    lang: 'auto',
     authors: [emptyAuthor()],
-    // 論文
     title: '',
     journalId: '',
     freeJournal: '',
@@ -103,12 +94,10 @@ export function emptyAchievement(categoryId = 'journal_reviewed') {
     pages: '',
     reviewed: true,
     doi: '',
-    // 学会
     conferenceId: '',
     freeConference: '',
     presentationNumber: '',
     venue: '',
-    // その他
     note: '',
     createdAt: new Date().toISOString(),
   };
@@ -138,8 +127,9 @@ export function saveDb(db) {
 
 /**
  * 旧バージョンのデータを現行スキーマへ変換する。
- *  v1 → v2: 共著者の freeAffiliation（「・」区切り文字列）を所属マスタへ登録し、ID 参照に置き換える
- *  v2 → v3: 所属に英語名称・英語略称、業績に表記言語（lang）を追加
+ *  v1 → v2: 「A・B」形式の所属文字列を所属マスタへ登録し ID 参照に置き換える
+ *  v2 → v3: 所属の英語名称・英語略称、業績の表記言語を追加
+ *  v3 → v4: 所属に上位の所属（parentId）を追加。既存の所属はすべて最上位になる
  */
 export function migrate(data) {
   const base = emptyDb();
@@ -151,14 +141,23 @@ export function migrate(data) {
     masters: { ...base.masters, ...(data.masters ?? {}) },
     achievements: Array.isArray(data.achievements) ? data.achievements : [],
   };
+  if (!AFF_DISPLAY_OPTIONS.some((o) => o.value === db.profile.affDisplay)) db.profile.affDisplay = 'full';
   db.masters.persons = (db.masters.persons ?? []).map((p) => ({
     id: p.id ?? newId('per'), name: p.name ?? '', nameEn: p.nameEn ?? '',
     affiliationIds: Array.isArray(p.affiliationIds) ? p.affiliationIds : [],
   }));
   db.masters.affiliations = (db.masters.affiliations ?? []).map((a) => ({
     id: a.id ?? newId('aff'), name: a.name ?? '', shortName: a.shortName ?? '',
-    nameEn: a.nameEn ?? '', shortNameEn: a.shortNameEn ?? '',
+    nameEn: a.nameEn ?? '', shortNameEn: a.shortNameEn ?? '', parentId: a.parentId ?? '',
   }));
+  // 存在しない上位、自分自身、循環を指す parentId は最上位へ戻す
+  const ids = new Set(db.masters.affiliations.map((a) => a.id));
+  db.masters.affiliations.forEach((a) => {
+    if (a.parentId && (!ids.has(a.parentId) || a.parentId === a.id)) a.parentId = '';
+  });
+  db.masters.affiliations.forEach((a) => {
+    if (a.parentId && isCyclic(db, a.id)) a.parentId = '';
+  });
   db.masters.journals = (db.masters.journals ?? []).map((j) => ({
     id: j.id ?? newId('jnl'), name: j.name ?? '', abbr: j.abbr ?? '',
   }));
@@ -178,6 +177,7 @@ export function migrate(data) {
 // ══ マスタ操作 ══
 
 const isBlank = (v) => (Array.isArray(v) ? v.length === 0 : String(v ?? '').trim() === '');
+const tr = (v) => String(v ?? '').trim();
 
 /** 名称からマスタを検索し、無ければ追加して ID を返す（空欄の項目は補完する） */
 export function upsertMaster(list, fields, keyField = 'name', prefix = 'm') {
@@ -199,39 +199,134 @@ export function findById(list, id) {
   return list.find((x) => x.id === id) ?? null;
 }
 
-// ══ 所属の登録（和文名称・略称 ＋ 英語名称・略称）══
+// ══ 所属の階層 ══
+
+/** 所属の上位をたどって循環しているか */
+function isCyclic(db, id) {
+  const seen = new Set();
+  let cur = findById(db.masters.affiliations, id);
+  while (cur && cur.parentId) {
+    if (seen.has(cur.id)) return true;
+    seen.add(cur.id);
+    cur = findById(db.masters.affiliations, cur.parentId);
+    if (cur && cur.id === id) return true;
+  }
+  return false;
+}
+
+/**
+ * 所属の階層パス（最上位 → 指定の所属）を返す。
+ * 例: [東京大学, 大学院理学系研究科, 生物科学専攻]
+ */
+export function affiliationPath(db, id) {
+  const path = [];
+  const seen = new Set();
+  let cur = findById(db.masters.affiliations, id);
+  while (cur && !seen.has(cur.id) && path.length < MAX_AFF_DEPTH) {
+    path.unshift(cur);
+    seen.add(cur.id);
+    cur = cur.parentId ? findById(db.masters.affiliations, cur.parentId) : null;
+  }
+  return path;
+}
+
+/** 所属の深さ（最上位 = 0） */
+export function affiliationDepth(db, id) {
+  return Math.max(affiliationPath(db, id).length - 1, 0);
+}
+
+/** 直下の所属 */
+export function childAffiliations(db, id) {
+  return db.masters.affiliations.filter((a) => (a.parentId || '') === (id || ''));
+}
+
+/** すべての下位の所属の ID（自分は含まない） */
+export function descendantIds(db, id) {
+  const out = [];
+  const walk = (pid) => {
+    childAffiliations(db, pid).forEach((c) => {
+      if (out.includes(c.id) || c.id === id) return;
+      out.push(c.id);
+      walk(c.id);
+    });
+  };
+  walk(id);
+  return out;
+}
+
+/** parentId を上位に設定してよいか（自分自身・自分の下位は不可） */
+export function canSetParent(db, id, parentId) {
+  if (!parentId) return true;
+  if (parentId === id) return false;
+  if (!findById(db.masters.affiliations, parentId)) return false;
+  if (descendantIds(db, id).includes(parentId)) return false;
+  return affiliationDepth(db, parentId) + 1 < MAX_AFF_DEPTH;
+}
+
+/**
+ * 所属を階層順（親の直後に子）に並べ、深さを付けて返す。
+ * 同じ階層の中では名称順。上位が存在しない所属は最上位として扱う。
+ * @returns {{aff, depth}[]}
+ */
+export function affiliationTree(db) {
+  const list = db.masters.affiliations;
+  const ids = new Set(list.map((a) => a.id));
+  const byName = (a, b) => a.name.localeCompare(b.name, 'ja');
+  const out = [];
+  const visited = new Set();
+  const walk = (aff, depth) => {
+    if (visited.has(aff.id)) return;
+    visited.add(aff.id);
+    out.push({ aff, depth });
+    list.filter((c) => c.parentId === aff.id).sort(byName).forEach((c) => walk(c, depth + 1));
+  };
+  list.filter((a) => !a.parentId || !ids.has(a.parentId)).sort(byName).forEach((a) => walk(a, 0));
+  // 循環などで到達できなかった所属も漏らさない
+  list.filter((a) => !visited.has(a.id)).sort(byName).forEach((a) => walk(a, 0));
+  return out;
+}
+
+/** 所属マスタを階層順に並べた一覧 */
+export function sortedAffiliations(db) {
+  return affiliationTree(db).map((x) => x.aff);
+}
+
+// ══ 所属の登録（和文名称・略称 ＋ 英語名称・略称 ＋ 上位の所属）══
 
 const AFF_FIELDS = ['shortName', 'nameEn', 'shortNameEn'];
 const AFF_LABEL = { shortName: '略称', nameEn: '英語名称', shortNameEn: '英語略称' };
 
 /**
  * 所属を登録する。
- *  - 和文名称（name）をキーに重複を防ぐ。英語名称だけが一致する既存項目もその所属とみなす
- *  - 既存項目で空欄の略称・英語名称・英語略称は補完する
- *  - 既に値があり入力値と異なる項目は conflicts に返し、updateExisting=true のときだけ上書きする
- * @param {{shortName?, nameEn?, shortNameEn?}} fields
- * @returns {{id, created, updated, conflicts:{field,label,current,incoming}[]}}
+ *  - 同じ上位の中で和文名称が同じ所属は重複登録しない（別の大学の「理学部」は別の所属として扱う）
+ *  - 英語名称だけが一致する同じ上位の所属もその所属とみなす
+ *  - 空欄の略称・英語名称・英語略称は補完し、食い違いは conflicts に返す（updateExisting=true で上書き）
+ * @param {{shortName?, nameEn?, shortNameEn?, parentId?}} fields
  */
 export function addAffiliation(db, name, fields = {}, { updateExisting = false } = {}) {
-  // 旧呼び出し addAffiliation(db, name, '略称') との互換
   const f = typeof fields === 'string' ? { shortName: fields } : (fields ?? {});
-  const n = String(name ?? '').trim();
-  const incoming = Object.fromEntries(AFF_FIELDS.map((k) => [k, String(f[k] ?? '').trim()]));
+  const n = tr(name);
+  const parentId = tr(f.parentId);
+  const incoming = Object.fromEntries(AFF_FIELDS.map((k) => [k, tr(f[k])]));
   if (n === '' && incoming.nameEn === '') throw new Error('所属の名称を入力してください。');
+  if (parentId && !findById(db.masters.affiliations, parentId)) throw new Error('上位の所属が見つかりません。');
+  if (parentId && affiliationDepth(db, parentId) + 1 >= MAX_AFF_DEPTH) {
+    throw new Error(`所属の階層は ${MAX_AFF_DEPTH} 段までです。`);
+  }
 
   const list = db.masters.affiliations;
-  const hit = (n !== '' ? list.find((a) => a.name.trim() === n) : null)
-    ?? (incoming.nameEn !== '' ? findAffiliationByEnglish(db, incoming.nameEn) : null);
+  const hit = (n !== '' ? list.find((a) => a.name.trim() === n && (a.parentId || '') === parentId) : null)
+    ?? (incoming.nameEn !== '' ? findAffiliationByEnglish(db, incoming.nameEn, parentId) : null);
 
   if (!hit) {
-    const item = { id: newId('aff'), name: n || incoming.nameEn, ...incoming };
+    const item = { id: newId('aff'), name: n || incoming.nameEn, ...incoming, parentId };
     list.push(item);
     return { id: item.id, created: true, updated: false, conflicts: [] };
   }
   let updated = false;
   const conflicts = [];
   AFF_FIELDS.forEach((k) => {
-    const cur = String(hit[k] ?? '').trim();
+    const cur = tr(hit[k]);
     const inc = incoming[k];
     if (inc === '' || inc === cur) return;
     if (cur === '' || updateExisting) { hit[k] = inc; updated = true; return; }
@@ -240,39 +335,45 @@ export function addAffiliation(db, name, fields = {}, { updateExisting = false }
   return { id: hit.id, created: false, updated, conflicts };
 }
 
-/** 英語名称・英語略称（または和文名称）が一致する所属を探す（大文字小文字・空白を無視） */
-export function findAffiliationByEnglish(db, text) {
+/**
+ * 英語名称・英語略称（または和文名称）が一致する所属を探す（大文字小文字・空白を無視）。
+ * parentId を指定するとその上位の直下に限る（null なら全階層・最上位を優先）。
+ */
+export function findAffiliationByEnglish(db, text, parentId = null) {
   const norm = (s) => String(s ?? '').toLowerCase().replace(/[\s.,]+/g, '');
   const t = norm(text);
   if (t === '') return null;
-  return db.masters.affiliations.find((a) => [a.nameEn, a.shortNameEn, a.name].some((v) => norm(v) === t)) ?? null;
+  const match = (a) => [a.nameEn, a.shortNameEn, a.name].some((v) => norm(v) === t);
+  if (parentId !== null) {
+    return db.masters.affiliations.find((a) => (a.parentId || '') === (parentId || '') && match(a)) ?? null;
+  }
+  return sortedAffiliations(db).find(match) ?? null;
 }
 
-/** 所属の表示ラベル: 名称（略称） / English Name (Abbr) */
+/** 1 つの所属の表示ラベル: 名称（略称） / English Name (Abbr) */
 export function affiliationLabel(aff) {
   if (!aff) return '';
-  const s = String(aff.shortName ?? '').trim();
+  const s = tr(aff.shortName);
   const ja = s ? `${aff.name}（${s}）` : aff.name;
-  const en = String(aff.nameEn ?? '').trim();
-  const se = String(aff.shortNameEn ?? '').trim();
+  const en = tr(aff.nameEn);
+  const se = tr(aff.shortNameEn);
   if (en === '' && se === '') return ja;
   return `${ja} / ${en || se}${en && se ? ` (${se})` : ''}`;
 }
 
-/** 所属マスタを名称順に並べた一覧 */
-export function sortedAffiliations(db) {
-  return db.masters.affiliations.slice().sort((a, b) => a.name.localeCompare(b.name, 'ja'));
+/** 階層を含めた表示ラベル: 東京大学 ＞ 大学院理学系研究科 ＞ 生物科学専攻 */
+export function affiliationPathLabel(db, id, sep = ' ＞ ') {
+  return affiliationPath(db, id).map((a) => a.name).join(sep);
 }
 
-/** 旧形式の所属文字列（「A・B」）を所属マスタへ登録し、affiliationIds へ移す */
+/** 旧形式の所属文字列（「A・B」）を所属マスタ（最上位）へ登録し、affiliationIds へ移す */
 export function resolveLegacyAffiliations(db, author) {
   const au = { ...emptyAuthor(), ...author };
   const ids = Array.isArray(au.affiliationIds) ? au.affiliationIds.slice() : [];
-  const free = String(au.freeAffiliation ?? '').trim();
+  const free = tr(au.freeAffiliation);
   if (free !== '') {
     free.split(/[・,、]/).map((x) => x.trim()).filter(Boolean).forEach((name) => {
-      const id = upsertMaster(db.masters.affiliations,
-        { name, shortName: '', nameEn: '', shortNameEn: '' }, 'name', 'aff');
+      const id = addAffiliation(db, name, {}).id;
       if (id && !ids.includes(id)) ids.push(id);
     });
   }
@@ -283,7 +384,6 @@ export function resolveLegacyAffiliations(db, author) {
 
 // ══ 人物の英語名 ══
 
-/** 英語名の比較用キー（姓 + 名の頭文字） */
 function englishKey(family, given) {
   const f = String(family ?? '').toLowerCase().replace(/[^a-z]/g, '');
   const g = String(given ?? '').toLowerCase().replace(/[^a-z]/g, '');
@@ -292,7 +392,7 @@ function englishKey(family, given) {
 
 /** "Gibu, Kodai" / "Gibu, K." / "Kodai Gibu" を {family, given} に分解する */
 export function splitEnglishName(text) {
-  const s = String(text ?? '').trim();
+  const s = tr(text);
   if (s === '') return { family: '', given: '' };
   if (s.includes(',')) {
     const [family, given] = s.split(',').map((x) => x.trim());
@@ -303,43 +403,37 @@ export function splitEnglishName(text) {
   return { family: parts[parts.length - 1], given: parts.slice(0, -1).join(' ') };
 }
 
-/**
- * 英語名から登録済みの人物を探す。
- * "Gibu, Kodai" と "Gibu, K." と "Kodai Gibu" を同一人物とみなす（姓＋名の頭文字で照合）。
- */
+/** 英語名から登録済みの人物を探す（姓＋名の頭文字で照合） */
 export function findPersonByEnglish(db, text) {
   const { family, given } = splitEnglishName(text);
   const key = englishKey(family, given);
   if (key === '') return null;
-  return db.masters.persons.find((p) => {
-    const cands = [p.nameEn, p.name].filter((v) => String(v ?? '').trim() !== '');
-    return cands.some((v) => {
-      const s = splitEnglishName(v);
-      return englishKey(s.family, s.given) === key;
-    });
-  }) ?? null;
+  return db.masters.persons.find((p) => [p.nameEn, p.name].filter((v) => tr(v) !== '').some((v) => {
+    const s = splitEnglishName(v);
+    return englishKey(s.family, s.given) === key;
+  })) ?? null;
 }
 
-/** 人物の表示ラベル（氏名 / English） */
 export function personLabel(p) {
   if (!p) return '';
-  const en = String(p.nameEn ?? '').trim();
+  const en = tr(p.nameEn);
   return en ? `${p.name} / ${en}` : p.name;
 }
 
 // ══ 削除と使用件数 ══
 
-/** マスタ項目を削除する。使用中の業績があれば削除せず件数を返す */
+/** マスタ項目を削除する。使用中（所属は下位の所属がある場合も）なら削除しない */
 export function removeMaster(db, type, id) {
   const used = countMasterUsage(db, type, id);
-  if (used > 0) return { removed: false, used };
+  const children = type === 'affiliations' ? childAffiliations(db, id).length : 0;
+  if (used > 0 || children > 0) return { removed: false, used, children };
   const list = db.masters[type];
   const i = list.findIndex((x) => x.id === id);
   if (i >= 0) list.splice(i, 1);
-  return { removed: true, used: 0 };
+  return { removed: true, used: 0, children: 0 };
 }
 
-/** マスタ項目が業績（と人物の既定所属）で何件使われているか数える */
+/** マスタ項目が業績（と人物の既定所属）で何件使われているか */
 export function countMasterUsage(db, type, id) {
   let n = 0;
   db.achievements.forEach((a) => {
@@ -348,22 +442,16 @@ export function countMasterUsage(db, type, id) {
     if (type === 'persons' && (a.authors ?? []).some((au) => au.personId === id)) n += 1;
     if (type === 'affiliations' && (a.authors ?? []).some((au) => (au.affiliationIds ?? []).includes(id))) n += 1;
   });
-  if (type === 'affiliations') {
-    n += db.masters.persons.filter((p) => (p.affiliationIds ?? []).includes(id)).length;
-  }
+  if (type === 'affiliations') n += db.masters.persons.filter((p) => (p.affiliationIds ?? []).includes(id)).length;
   return n;
 }
 
 // ══ 並べ替え ══
 
 export function dateKey(a) {
-  const y = Number(a.year) || 0;
-  const m = Number(a.month) || 0;
-  const d = Number(a.day) || 0;
-  return y * 10000 + m * 100 + d;
+  return (Number(a.year) || 0) * 10000 + (Number(a.month) || 0) * 100 + (Number(a.day) || 0);
 }
 
-/** 業績を区分ごとにまとめ、指定順で並べる */
 export function groupByCategory(achievements, order = 'asc') {
   const map = new Map();
   CATEGORIES.forEach((c) => map.set(c.id, []));
@@ -384,15 +472,17 @@ export function summarize(db) {
   const byCategory = {};
   db.achievements.forEach((a) => { byCategory[a.categoryId] = (byCategory[a.categoryId] ?? 0) + 1; });
   const years = db.achievements.map((a) => Number(a.year)).filter((y) => y > 0);
+  const affs = db.masters.affiliations;
   return {
     total: db.achievements.length,
     byCategory,
     minYear: years.length ? Math.min(...years) : null,
     maxYear: years.length ? Math.max(...years) : null,
     persons: db.masters.persons.length,
-    personsWithEn: db.masters.persons.filter((p) => String(p.nameEn ?? '').trim() !== '').length,
-    affiliations: db.masters.affiliations.length,
-    affiliationsWithEn: db.masters.affiliations.filter((a) => String(a.nameEn ?? '').trim() !== '').length,
+    personsWithEn: db.masters.persons.filter((p) => tr(p.nameEn) !== '').length,
+    affiliations: affs.length,
+    affiliationsTop: affs.filter((a) => !a.parentId).length,
+    affiliationsWithEn: affs.filter((a) => tr(a.nameEn) !== '').length,
     journals: db.masters.journals.length,
     conferences: db.masters.conferences.length,
   };
@@ -420,7 +510,14 @@ export function importJson(text, mode = 'replace', current = null) {
 
   const db = migrate(current);
   const idMap = { persons: {}, affiliations: {}, journals: {}, conferences: {} };
-  ['affiliations', 'journals', 'conferences'].forEach((type) => {
+  // 所属は上位から順に取り込み、「同じ上位 × 同じ名称」でまとめる
+  affiliationTree(incoming).forEach(({ aff }) => {
+    const parentId = aff.parentId ? (idMap.affiliations[aff.parentId] ?? '') : '';
+    idMap.affiliations[aff.id] = addAffiliation(db, aff.name, {
+      shortName: aff.shortName, nameEn: aff.nameEn, shortNameEn: aff.shortNameEn, parentId,
+    }).id;
+  });
+  ['journals', 'conferences'].forEach((type) => {
     incoming.masters[type].forEach((item) => {
       const { id, ...fields } = item;
       idMap[type][id] = upsertMaster(db.masters[type], fields, 'name', type.slice(0, 3));
@@ -454,7 +551,6 @@ export function importJson(text, mode = 'replace', current = null) {
   return { db, added };
 }
 
-/** 重複判定用のシグネチャ */
 export function signature(a) {
   return [a.categoryId, a.title, a.year, a.month, a.day, a.presentationNumber, a.note]
     .map((v) => String(v ?? '').trim()).join('|');

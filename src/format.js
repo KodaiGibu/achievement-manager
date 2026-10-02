@@ -1,10 +1,10 @@
 /**
  * 業績管理アプリ — 出力整形
  *
- * 業績ごとの「表記言語」（自動 / 日本語 / 英語）に応じて、
- * 著者名・所属を和文または英文で出力する。自分の氏名は太字＋下線で強調する。
+ * 業績ごとの「表記言語」（自動 / 日本語 / 英語）に応じて著者名・所属を和文または英文で出力する。
+ * 所属は階層（機関 ＞ 学部 ＞ 専攻 など）をたどって組み立てる。自分の氏名は太字＋下線で強調する。
  */
-import { CATEGORY_MAP, findById, groupByCategory, kindOf } from './model.js';
+import { CATEGORY_MAP, findById, groupByCategory, kindOf, affiliationPath } from './model.js';
 
 const hasJa = (s) => /[ぁ-んァ-ヶ一-龠々ー]/.test(String(s ?? ''));
 const t = (v) => String(v ?? '').trim();
@@ -14,8 +14,7 @@ const t = (v) => String(v ?? '').trim();
 /**
  * 業績の表記言語を決める。
  *  - lang が 'ja' / 'en' ならそのまま
- *  - 'auto' の場合: 国際学会の区分は英語。それ以外は、タイトルと掲載誌・大会名に
- *    日本語が含まれなければ英語、含まれれば日本語
+ *  - 'auto': 国際学会は英語。それ以外はタイトルと掲載誌・大会名に日本語を含まなければ英語
  */
 export function resolveLang(db, a) {
   if (a.lang === 'ja' || a.lang === 'en') return a.lang;
@@ -26,13 +25,8 @@ export function resolveLang(db, a) {
   return hasJa(text) ? 'ja' : 'en';
 }
 
-// ══ 著者の整形 ══
+// ══ 著者 ══
 
-/**
- * 著者の表示名。
- *  en: 英語表記 → （無ければ）和文氏名
- *  ja: 和文氏名 → （無ければ）英語表記
- */
 export function authorName(db, author, lang = 'ja') {
   const p = findById(db.masters.persons, author.personId);
   const ja = t(p ? p.name : author.freeName);
@@ -41,16 +35,17 @@ export function authorName(db, author, lang = 'ja') {
   return ja || en;
 }
 
-/** 著者に英語表記が登録されているか */
 export function hasEnglishName(db, author) {
   const p = findById(db.masters.persons, author.personId);
   return t(p ? p.nameEn : '') !== '' || t(author.freeNameEn) !== '';
 }
 
+// ══ 所属 ══
+
 /**
- * 所属の表記（複数所属は ja:「・」 / en:「, 」で連結）。
+ * 1 つの所属（階層の 1 段）の表記。
  *  ja: 略称 → 名称（useShort=false なら名称）
- *  en: 英語略称 → 英語名称 → 和文の略称・名称（英語が未登録の場合）
+ *  en: 英語略称 → 英語名称 → 和文（英語が未登録の場合）
  */
 export function affiliationText(aff, lang = 'ja', useShort = true) {
   if (!aff) return '';
@@ -61,13 +56,38 @@ export function affiliationText(aff, lang = 'ja', useShort = true) {
   return useShort ? (t(aff.shortName) || t(aff.name)) : t(aff.name);
 }
 
-export function authorAffiliation(db, author, useShort = true, lang = 'ja') {
+/** 出力に使う階層の段を選ぶ（full: すべて / top: 最上位のみ / leaf: 最下位のみ） */
+export function pickPath(path, display = 'full') {
+  if (!path.length) return [];
+  if (display === 'top') return [path[0]];
+  if (display === 'leaf') return [path[path.length - 1]];
+  return path;
+}
+
+/**
+ * 所属 1 件を階層込みで表記する。
+ *  ja: 上位 → 下位の順に半角スペースで連結（東京大学 理学系研究科 生物科学専攻）
+ *  en: 下位 → 上位の順にカンマで連結（Dept. of Biological Sciences, Grad. Sch. of Science, UTokyo）
+ */
+export function affiliationPathText(db, id, lang = 'ja', useShort = true, display = null) {
+  const mode = display ?? db.profile?.affDisplay ?? 'full';
+  const parts = pickPath(affiliationPath(db, id), mode)
+    .map((a) => affiliationText(a, lang, useShort)).filter((s) => s !== '');
+  if (lang === 'en') return parts.reverse().join(', ');
+  return parts.join(' ');
+}
+
+/**
+ * 著者の所属の表記。複数所属の区切りは ja:「・」/ en:「, 」。
+ * 英語で階層を含む（カンマを使う）所属がある場合は、区切りを「; 」にして読み違いを防ぐ。
+ */
+export function authorAffiliation(db, author, useShort = true, lang = 'ja', display = null) {
   const names = (author.affiliationIds ?? [])
-    .map((id) => affiliationText(findById(db.masters.affiliations, id), lang, useShort))
-    .filter((s) => s !== '');
+    .map((id) => affiliationPathText(db, id, lang, useShort, display)).filter((s) => s !== '');
   const free = t(author.freeAffiliation);
   if (free !== '') names.push(free);
-  return names.join(lang === 'en' ? ', ' : '・');
+  if (lang === 'en') return names.join(names.some((s) => s.includes(',')) ? '; ' : ', ');
+  return names.join('・');
 }
 
 /** 自分の氏名かどうか（profile.selfNames と空白を除いて一致） */
@@ -80,21 +100,16 @@ export function isSelf(db, name) {
   });
 }
 
-/** 著者エントリが自分か（和文・英文のどちらかが自分の表記に一致） */
 export function isSelfAuthor(db, author) {
   return isSelf(db, authorName(db, author, 'ja')) || isSelf(db, authorName(db, author, 'en'));
 }
 
-/** 著者一覧を整形する */
 export function formatAuthors(db, achievement, { lang = 'ja', withAffiliation = true } = {}) {
-  const parts = (achievement.authors ?? []).map((au) => {
-    const name = authorName(db, au, lang);
-    return {
-      name,
-      affiliation: withAffiliation ? authorAffiliation(db, au, true, lang) : '',
-      self: isSelfAuthor(db, au),
-    };
-  }).filter((p) => p.name !== '');
+  const parts = (achievement.authors ?? []).map((au) => ({
+    name: authorName(db, au, lang),
+    affiliation: withAffiliation ? authorAffiliation(db, au, true, lang) : '',
+    self: isSelfAuthor(db, au),
+  })).filter((p) => p.name !== '');
   const text = parts.map((p) => authorLabel(p, lang)).join(lang === 'en' ? ', ' : '・');
   return { text, parts };
 }
@@ -104,12 +119,11 @@ function authorLabel(p, lang) {
   return lang === 'en' ? `${p.name} (${p.affiliation})` : `${p.name}（${p.affiliation}）`;
 }
 
-// ══ 日付・巻号 ══
+// ══ 日付・巻号・誌名 ══
 
 const MONTHS_EN = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
   'August', 'September', 'October', 'November', 'December'];
 
-/** 2024年3月28日 の形式（月日が無ければ省略） */
 export function formatDateJa(a) {
   const y = t(a.year);
   if (y === '') return '';
@@ -121,7 +135,6 @@ export function formatDateJa(a) {
   return s;
 }
 
-/** 28 March 2024 の形式（月日が無ければ省略） */
 export function formatDateEn(a) {
   const y = t(a.year);
   if (y === '') return '';
@@ -135,7 +148,6 @@ export function formatDate(a, lang) {
   return lang === 'en' ? formatDateEn(a) : formatDateJa(a);
 }
 
-/** 巻(号) の形式。号が無ければ巻のみ */
 export function formatVolume(a) {
   const v = t(a.volume);
   const i = t(a.issue);
@@ -145,7 +157,6 @@ export function formatVolume(a) {
   return `${v}(${i})`;
 }
 
-/** ジャーナル名（preferAbbr=true なら略称を優先） */
 export function journalLabel(db, a, preferAbbr = false) {
   const j = findById(db.masters.journals, a.journalId);
   if (j) {
@@ -155,7 +166,6 @@ export function journalLabel(db, a, preferAbbr = false) {
   return t(a.freeJournal);
 }
 
-/** 大会名 */
 export function conferenceLabel(db, a) {
   const c = findById(db.masters.conferences, a.conferenceId);
   if (c) return c.name;
@@ -164,10 +174,6 @@ export function conferenceLabel(db, a) {
 
 // ══ 1件分の整形 ══
 
-/**
- * 業績 1 件をテキスト片の配列で返す。
- * 各片は {text, bold, underline, italic} を持つ中間表現。
- */
 export function formatItemParts(db, a) {
   const kind = kindOf(a.categoryId);
   const lang = resolveLang(db, a);
@@ -175,10 +181,7 @@ export function formatItemParts(db, a) {
   const out = [];
   const push = (text, opts = {}) => { if (text !== '') out.push({ text, ...opts }); };
 
-  const { parts } = formatAuthors(db, a, {
-    lang,
-    withAffiliation: kind === 'conference' || kind === 'other',
-  });
+  const { parts } = formatAuthors(db, a, { lang, withAffiliation: kind === 'conference' || kind === 'other' });
   parts.forEach((p, i) => {
     if (i > 0) push(en ? ', ' : '・');
     push(authorLabel(p, lang), p.self ? { bold: true, underline: true } : {});
@@ -228,7 +231,6 @@ export function formatItemParts(db, a) {
     return out;
   }
 
-  // その他（講義・シンポジウム等）
   const sep = en ? '.' : '．';
   push(sep);
   if (title !== '') push(`${en ? ' ' : ''}${title}${sep}`);
@@ -262,11 +264,8 @@ function partsToMarkdown(parts) {
     return x;
   }).join('');
 }
-function partsToPlain(parts) {
-  return parts.map((p) => p.text).join('');
-}
+const partsToPlain = (parts) => parts.map((p) => p.text).join('');
 
-/** 1件分のテキストを指定形式で返す */
 export function formatItem(db, a, format = 'plain') {
   const parts = formatItemParts(db, a);
   if (format === 'html') return partsToHtml(parts);
@@ -274,12 +273,9 @@ export function formatItem(db, a, format = 'plain') {
   return partsToPlain(parts);
 }
 
-/** 業績リスト全体を生成する */
 export function buildList(db, format = 'markdown', opts = {}) {
   const { order = 'asc', title = null, categoryIds = null } = opts;
-  const items = categoryIds
-    ? db.achievements.filter((a) => categoryIds.includes(a.categoryId))
-    : db.achievements;
+  const items = categoryIds ? db.achievements.filter((a) => categoryIds.includes(a.categoryId)) : db.achievements;
   const groups = groupByCategory(items, order);
   const heading = title ?? defaultTitle();
 
@@ -305,28 +301,21 @@ ${body}
 </body></html>
 `;
   }
-
   if (format === 'markdown') {
-    const body = groups.map((g) => {
-      const lis = g.items.map((a) => `- ${partsToMarkdown(formatItemParts(db, a))}`).join('\n');
-      return `## ${g.category.label}\n\n${lis}`;
-    }).join('\n\n');
+    const body = groups.map((g) => `## ${g.category.label}\n\n${
+      g.items.map((a) => `- ${partsToMarkdown(formatItemParts(db, a))}`).join('\n')}`).join('\n\n');
     return `# ${heading}\n\n${body}\n`;
   }
-
-  const body = groups.map((g) => {
-    const lis = g.items.map((a) => `・${partsToPlain(formatItemParts(db, a))}`).join('\n');
-    return `【${g.category.label}】\n${lis}`;
-  }).join('\n\n');
+  const body = groups.map((g) => `【${g.category.label}】\n${
+    g.items.map((a) => `・${partsToPlain(formatItemParts(db, a))}`).join('\n')}`).join('\n\n');
   return `${heading}\n\n${body}\n`;
 }
 
-/** 既定の表題（作成日入り） */
 export function defaultTitle(d = new Date()) {
   return `業績目録（${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日現在）`;
 }
 
-// ══ CSV 出力 ══
+// ══ CSV ══
 
 export const CSV_HEADER = [
   '区分', '表記', '著者', '著者（英語）', '所属', '所属（英語）', 'タイトル', 'ジャーナル/大会名', 'ジャーナル略称',
@@ -338,55 +327,40 @@ function escCsv(v) {
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-/** 所属を1件ずつ取り出し、重複を除いて並べる */
+/** 所属を 1 件ずつ（階層をすべて含む正式名称で）重複を除いて並べる */
 function uniqueAffiliations(db, a, lang) {
   const names = [];
-  (a.authors ?? []).forEach((au) => {
-    (au.affiliationIds ?? []).forEach((id) => {
-      const s = affiliationText(findById(db.masters.affiliations, id), lang, false);
-      if (s && !names.includes(s)) names.push(s);
-    });
-  });
+  (a.authors ?? []).forEach((au) => (au.affiliationIds ?? []).forEach((id) => {
+    const s = affiliationPathText(db, id, lang, false, 'full');
+    if (s && !names.includes(s)) names.push(s);
+  }));
   return names;
 }
 
-/** 業績一覧を CSV で返す（UTF-8 BOM は呼び出し側で付与） */
 export function buildCsv(db, opts = {}) {
   const { order = 'asc', categoryIds = null } = opts;
-  const items = categoryIds
-    ? db.achievements.filter((a) => categoryIds.includes(a.categoryId))
-    : db.achievements;
-  const groups = groupByCategory(items, order);
+  const items = categoryIds ? db.achievements.filter((a) => categoryIds.includes(a.categoryId)) : db.achievements;
   const lines = [CSV_HEADER.join(',')];
-  groups.forEach((g) => {
-    g.items.forEach((a) => {
-      const names = (lang) => (a.authors ?? []).map((au) => authorName(db, au, lang)).filter(Boolean).join('; ');
-      const j = findById(db.masters.journals, a.journalId);
-      lines.push([
-        g.category.label,
-        resolveLang(db, a) === 'en' ? '英語' : '日本語',
-        names('ja'), names('en'),
-        uniqueAffiliations(db, a, 'ja').join('; '),
-        uniqueAffiliations(db, a, 'en').join('; '),
-        a.title,
-        kindOf(a.categoryId) === 'paper' ? journalLabel(db, a) : conferenceLabel(db, a),
-        j ? j.abbr : '',
-        a.year, a.month, a.day, a.volume, a.issue, a.pages, a.presentationNumber,
-        kindOf(a.categoryId) === 'paper' ? (a.reviewed ? '有' : '無') : '',
-        a.doi, a.venue, a.note,
-      ].map(escCsv).join(','));
-    });
-  });
+  groupByCategory(items, order).forEach((g) => g.items.forEach((a) => {
+    const names = (lang) => (a.authors ?? []).map((au) => authorName(db, au, lang)).filter(Boolean).join('; ');
+    const j = findById(db.masters.journals, a.journalId);
+    lines.push([
+      g.category.label, resolveLang(db, a) === 'en' ? '英語' : '日本語',
+      names('ja'), names('en'),
+      uniqueAffiliations(db, a, 'ja').join('; '), uniqueAffiliations(db, a, 'en').join('; '),
+      a.title, kindOf(a.categoryId) === 'paper' ? journalLabel(db, a) : conferenceLabel(db, a),
+      j ? j.abbr : '', a.year, a.month, a.day, a.volume, a.issue, a.pages, a.presentationNumber,
+      kindOf(a.categoryId) === 'paper' ? (a.reviewed ? '有' : '無') : '', a.doi, a.venue, a.note,
+    ].map(escCsv).join(','));
+  }));
   return lines.join('\r\n') + '\r\n';
 }
 
-/** 出力ファイル名 */
 export function fileName(ext, d = new Date()) {
   const p2 = (x) => String(x).padStart(2, '0');
   return `業績目録_${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}.${ext}`;
 }
 
-/** バックアップのファイル名 */
 export function backupFileName(d = new Date()) {
   const p2 = (x) => String(x).padStart(2, '0');
   return `achievements_backup_${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}.json`;

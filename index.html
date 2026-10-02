@@ -43,8 +43,8 @@
           <span class="edit-state hidden" id="f-editing">編集中</span>
           <button type="button" id="f-new" class="ghost">新規入力に戻す</button>
         </div>
-        <p class="hint">英語表記では、著者名と所属が登録済みの<b>英名</b>（英語表記・英語名称／英語略称）で出力されます。
-          「自動判定」は、国際学会の区分と、タイトル・掲載誌名に日本語を含まない論文を英語表記にします。</p>
+        <p class="hint">英語表記では著者名と所属が登録済みの英名で出力されます。
+          「自動判定」は国際学会の区分と、タイトル・掲載誌名に日本語を含まない論文を英語表記にします。</p>
         <div class="lang-warn hidden" id="f-lang-warn"></div>
       </fieldset>
 
@@ -57,8 +57,6 @@
           <label class="chk"><input type="checkbox" id="f-doi-authors" checked> 著者も上書きする</label>
           <span class="doi-state" id="f-doi-state"></span>
         </div>
-        <p class="hint">CrossRef の英語の著者名は、英語表記が一致する登録済みの共著者に自動で紐づけます
-          （「Gibu, Kodai」「Gibu, K.」「Kodai Gibu」は同一人物とみなします）。</p>
       </fieldset>
 
       <fieldset class="lf">
@@ -68,20 +66,17 @@
           <button type="button" id="f-add-author" class="mini">＋ 著者を追加</button>
           <button type="button" id="f-add-self" class="mini">＋ 自分を先頭に追加</button>
         </div>
-        <p class="hint">氏名と<b>英語表記</b>は共著者として記憶されます。氏名欄では和文名・英語表記のどちらで入力・選択しても同じ人物になります。
-          所属は「過去の所属から選択」するか、「新しい所属」に名称・略称・<b>英語名称・英語略称</b>を入力して登録してください。</p>
+        <p class="hint">所属は<b>階層</b>（機関 ＞ 学部・研究科 ＞ 学科・専攻 ／ 研究所 ＞ 部門 ＞ グループ など）で登録できます。
+          「新しい所属」で<b>上位の所属</b>を選ぶと、その下に登録されます（例: 上位に「東京大学」を選んで「大学院理学系研究科」を登録）。
+          著者には最も下の階層（専攻・部門など）を選ぶと、上位の機関名も含めて出力されます。</p>
       </fieldset>
 
-      <!-- 論文用 -->
       <fieldset class="lf kind-paper">
         <legend>論文情報</legend>
-        <div class="grid">
-          <label class="wide">論文タイトル:<input type="text" id="f-title-paper" size="60"></label>
-        </div>
+        <div class="grid"><label class="wide">論文タイトル:<input type="text" id="f-title-paper" size="60"></label></div>
         <div class="grid">
           <label>ジャーナル名:<input type="text" id="f-journal" list="dl-journals" size="30"></label>
           <label>略称:<input type="text" id="f-journal-abbr" size="16"></label>
-          <span class="hint-inline">初めて入力したジャーナルと略称は自動で記憶されます。</span>
         </div>
         <div class="grid">
           <label>発表年:<input type="text" id="f-year-paper" size="6" placeholder="2024"></label>
@@ -97,12 +92,9 @@
         </div>
       </fieldset>
 
-      <!-- 学会用 -->
       <fieldset class="lf kind-conference hidden">
         <legend>学会発表情報</legend>
-        <div class="grid">
-          <label class="wide">発表タイトル:<input type="text" id="f-title-conf" size="60"></label>
-        </div>
+        <div class="grid"><label class="wide">発表タイトル:<input type="text" id="f-title-conf" size="60"></label></div>
         <div class="grid">
           <label>大会名:<input type="text" id="f-conference" list="dl-conferences" size="34"></label>
           <label>会場（任意）:<input type="text" id="f-venue-conf" size="18"></label>
@@ -115,12 +107,9 @@
         </div>
       </fieldset>
 
-      <!-- その他 -->
       <fieldset class="lf kind-other hidden">
         <legend>その他の業績情報</legend>
-        <div class="grid">
-          <label class="wide">件名・タイトル:<input type="text" id="f-title-other" size="60"></label>
-        </div>
+        <div class="grid"><label class="wide">件名・タイトル:<input type="text" id="f-title-other" size="60"></label></div>
         <div class="grid">
           <label>名称（講義名・事業名・大会名など）:<input type="text" id="f-conference-other" list="dl-conferences" size="34"></label>
           <label>会場・実施場所:<input type="text" id="f-venue-other" size="18"></label>
@@ -130,21 +119,20 @@
           <label>月:<input type="text" id="f-month-other" size="4"></label>
           <label>日:<input type="text" id="f-day-other" size="4"></label>
         </div>
-        <div class="grid">
-          <label class="wide">備考（担当内容・回数など）:<input type="text" id="f-note" size="60"></label>
-        </div>
+        <div class="grid"><label class="wide">備考（担当内容・回数など）:<input type="text" id="f-note" size="60"></label></div>
       </fieldset>
 
       <div class="btnbar">
         <button type="button" id="f-save" class="primary">この内容で登録</button>
         <button type="button" id="f-clear">入力をクリア</button>
         <span class="vsep"></span>
-        <button type="button" id="f-demo" class="ghost">サンプル入力（国際学会）</button>
+        <button type="button" id="f-demo" class="ghost">サンプル入力（階層所属）</button>
       </div>
 
       <fieldset class="lf preview-box">
         <legend>出力プレビュー</legend>
         <div class="preview" id="f-preview">（入力すると、ここに業績リストでの表示が出ます）</div>
+        <p class="hint" id="f-affdisplay-note"></p>
       </fieldset>
     </section>
 
@@ -154,20 +142,15 @@
         <legend>絞り込み・並べ替え</legend>
         <div class="grid">
           <label>区分:<select id="l-category"><option value="">すべて</option></select></label>
-          <label>キーワード:<input type="text" id="l-search" size="24" placeholder="タイトル・著者（和英）・所属・雑誌名"></label>
-          <label>並び順:<select id="l-order">
-            <option value="desc">新しい順</option>
-            <option value="asc">古い順</option>
-          </select></label>
+          <label>キーワード:<input type="text" id="l-search" size="24" placeholder="タイトル・著者・所属（上位も）・雑誌名"></label>
+          <label>並び順:<select id="l-order"><option value="desc">新しい順</option><option value="asc">古い順</option></select></label>
           <span class="flex-sp"></span>
           <span class="count-badge" id="l-count">0 件</span>
         </div>
       </fieldset>
       <div class="table-wrap"><table class="tbl" id="l-table">
-        <thead><tr>
-          <th>#</th><th>区分</th><th>表記</th><th>年月日</th><th class="w-title">タイトル</th>
-          <th>掲載誌 / 大会</th><th>著者</th><th>操作</th>
-        </tr></thead>
+        <thead><tr><th>#</th><th>区分</th><th>表記</th><th>年月日</th><th class="w-title">タイトル</th>
+          <th>掲載誌 / 大会</th><th>著者</th><th>操作</th></tr></thead>
         <tbody></tbody>
       </table></div>
     </section>
@@ -178,10 +161,11 @@
         <legend>出力設定</legend>
         <div class="grid">
           <label class="wide">表題:<input type="text" id="o-title" size="40"></label>
-          <label>並び順:<select id="o-order">
-            <option value="asc">古い順</option>
-            <option value="desc">新しい順</option>
-          </select></label>
+          <label>並び順:<select id="o-order"><option value="asc">古い順</option><option value="desc">新しい順</option></select></label>
+        </div>
+        <div class="grid">
+          <label>所属の階層:<select id="o-affdisplay"></select></label>
+          <span class="hint-inline">業績リスト・BibTeX 等すべての出力と入力プレビューに適用されます（CSV は常にすべての階層）。</span>
         </div>
         <div class="grid">
           <span class="lbl">出力する区分:</span>
@@ -192,7 +176,6 @@
           <button type="button" id="o-all-off" class="mini">全解除</button>
         </div>
       </fieldset>
-
       <div class="btnbar">
         <button type="button" id="o-refresh" class="primary">プレビュー更新</button>
         <span class="vsep"></span>
@@ -208,7 +191,6 @@
         <button type="button" id="o-copy">プレビューをコピー</button>
         <button type="button" id="o-print" class="accent">印刷 / PDF</button>
       </div>
-
       <div class="output-view" id="o-preview"></div>
     </section>
 
@@ -217,21 +199,13 @@
       <fieldset class="lf">
         <legend>集計設定</legend>
         <div class="grid">
-          <label>集計単位:<select id="y-basis">
-            <option value="fiscal">年度（4月〜翌3月）</option>
-            <option value="calendar">暦年（1月〜12月）</option>
-          </select></label>
+          <label>集計単位:<select id="y-basis"><option value="fiscal">年度（4月〜翌3月）</option><option value="calendar">暦年（1月〜12月）</option></select></label>
           <span class="flex-sp"></span>
           <button type="button" id="y-csv">集計表をCSV出力</button>
         </div>
-        <p class="hint">年度は日本の会計年度（4月1日〜翌年3月31日）で集計します。
-          月が未入力の業績は、その年の年度として扱います。</p>
       </fieldset>
       <div class="yearly-summary" id="y-summary"></div>
-      <fieldset class="lf">
-        <legend>年度別の推移</legend>
-        <div class="yearly-chart" id="y-chart"></div>
-      </fieldset>
+      <fieldset class="lf"><legend>年度別の推移</legend><div class="yearly-chart" id="y-chart"></div></fieldset>
       <div class="table-wrap"><table class="tbl" id="y-table"><thead></thead><tbody></tbody></table></div>
     </section>
 
@@ -241,38 +215,38 @@
         <legend>自分の氏名表記（出力時に太字＋下線になります）</legend>
         <div class="grid">
           <label class="wide">表記（改行区切り・和文と英文の両方を登録）:
-            <textarea id="m-selfnames" rows="3" spellcheck="false"></textarea>
-          </label>
+            <textarea id="m-selfnames" rows="3" spellcheck="false"></textarea></label>
           <button type="button" id="m-save-self" class="mini">保存</button>
         </div>
       </fieldset>
 
-      <div class="master-cols">
-        <fieldset class="lf">
-          <legend>所属（和文・英文）</legend>
-          <div class="grid">
-            <label>名称:<input type="text" id="m-aff-name" size="20" placeholder="産業技術総合研究所"></label>
-            <label>略称:<input type="text" id="m-aff-short" size="10" placeholder="産総研"></label>
-          </div>
-          <div class="grid">
-            <label>英語名称:<input type="text" id="m-aff-name-en" size="30"
-              placeholder="National Institute of Advanced Industrial Science and Technology"></label>
-            <label>英語略称:<input type="text" id="m-aff-short-en" size="10" placeholder="AIST"></label>
-          </div>
-          <div class="grid">
-            <button type="button" id="m-aff-add" class="mini">追加</button>
-            <button type="button" id="m-aff-cancel" class="mini hidden">編集をやめる</button>
-            <span class="edit-state hidden" id="m-aff-editing">編集中</span>
-            <span class="count-badge" id="m-aff-en-count">—</span>
-          </div>
-          <p class="hint">英語表記の業績では「英語略称 → 英語名称」の順で使われます（未登録なら和文で出力）。
-            名称を変更すると、その所属を使うすべての業績に反映されます。</p>
-          <div class="table-wrap short"><table class="tbl" id="m-aff-table">
-            <thead><tr><th>名称</th><th>略称</th><th>英語名称</th><th>英語略称</th><th>使用</th><th>操作</th></tr></thead>
-            <tbody></tbody>
-          </table></div>
-        </fieldset>
+      <fieldset class="lf aff-master">
+        <legend>所属（階層・和文・英文）</legend>
+        <div class="grid">
+          <label>上位の所属:<select id="m-aff-parent"></select></label>
+          <span class="hint-inline" id="m-aff-path"></span>
+        </div>
+        <div class="grid">
+          <label>名称:<input type="text" id="m-aff-name" size="22" placeholder="大学院理学系研究科"></label>
+          <label>略称:<input type="text" id="m-aff-short" size="10" placeholder="院理"></label>
+          <label>英語名称:<input type="text" id="m-aff-name-en" size="28" placeholder="Graduate School of Science"></label>
+          <label>英語略称:<input type="text" id="m-aff-short-en" size="10"></label>
+        </div>
+        <div class="grid">
+          <button type="button" id="m-aff-add" class="mini">追加</button>
+          <button type="button" id="m-aff-cancel" class="mini hidden">編集をやめる</button>
+          <span class="edit-state hidden" id="m-aff-editing">編集中</span>
+          <span class="count-badge" id="m-aff-en-count">—</span>
+        </div>
+        <p class="hint">表の「下位を追加」で、その所属の下に学部・専攻・部門などを追加できます。
+          上位の所属を変更すると、下位の所属もまとめて移動します。下位の所属がある所属や業績で使用中の所属は削除できません。</p>
+        <div class="table-wrap short"><table class="tbl" id="m-aff-table">
+          <thead><tr><th class="w-tree">名称（階層）</th><th>略称</th><th>英語名称</th><th>英語略称</th><th>使用</th><th>操作</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </fieldset>
 
+      <div class="master-cols">
         <fieldset class="lf">
           <legend>共著者（和文・英文）</legend>
           <div class="grid">
@@ -281,8 +255,7 @@
           </div>
           <div class="grid">
             <label class="wide">既定の所属（複数選択可・Ctrl / ⌘ キー）:
-              <select id="m-person-aff" multiple size="4"></select>
-            </label>
+              <select id="m-person-aff" multiple size="5"></select></label>
           </div>
           <div class="grid">
             <button type="button" id="m-person-add" class="mini">追加</button>
@@ -290,41 +263,39 @@
             <span class="edit-state hidden" id="m-person-editing">編集中</span>
             <span class="count-badge" id="m-person-en-count">—</span>
           </div>
-          <p class="hint">英語表記は「Gibu, K.」のように論文で使う形で登録してください。</p>
           <div class="table-wrap short"><table class="tbl" id="m-person-table">
             <thead><tr><th>氏名</th><th>英語表記</th><th>既定の所属</th><th>使用</th><th>操作</th></tr></thead>
             <tbody></tbody>
           </table></div>
         </fieldset>
 
-        <fieldset class="lf">
-          <legend>ジャーナル</legend>
-          <div class="grid">
-            <label>名称:<input type="text" id="m-jnl-name" size="20"></label>
-            <label>略称:<input type="text" id="m-jnl-abbr" size="12" placeholder="Sci Rep"></label>
-            <button type="button" id="m-jnl-add" class="mini">追加</button>
-            <button type="button" id="m-jnl-cancel" class="mini hidden">編集をやめる</button>
-            <span class="edit-state hidden" id="m-jnl-editing">編集中</span>
-          </div>
-          <div class="table-wrap short"><table class="tbl" id="m-jnl-table">
-            <thead><tr><th>名称</th><th>略称</th><th>使用</th><th>操作</th></tr></thead>
-            <tbody></tbody>
-          </table></div>
-        </fieldset>
-
-        <fieldset class="lf">
-          <legend>大会・講義名</legend>
-          <div class="grid">
-            <label>名称:<input type="text" id="m-cnf-name" size="26"></label>
-            <button type="button" id="m-cnf-add" class="mini">追加</button>
-            <button type="button" id="m-cnf-cancel" class="mini hidden">編集をやめる</button>
-            <span class="edit-state hidden" id="m-cnf-editing">編集中</span>
-          </div>
-          <div class="table-wrap short"><table class="tbl" id="m-cnf-table">
-            <thead><tr><th>名称</th><th>使用</th><th>操作</th></tr></thead>
-            <tbody></tbody>
-          </table></div>
-        </fieldset>
+        <div>
+          <fieldset class="lf">
+            <legend>ジャーナル</legend>
+            <div class="grid">
+              <label>名称:<input type="text" id="m-jnl-name" size="20"></label>
+              <label>略称:<input type="text" id="m-jnl-abbr" size="12" placeholder="Sci Rep"></label>
+              <button type="button" id="m-jnl-add" class="mini">追加</button>
+              <button type="button" id="m-jnl-cancel" class="mini hidden">編集をやめる</button>
+              <span class="edit-state hidden" id="m-jnl-editing">編集中</span>
+            </div>
+            <div class="table-wrap short"><table class="tbl" id="m-jnl-table">
+              <thead><tr><th>名称</th><th>略称</th><th>使用</th><th>操作</th></tr></thead><tbody></tbody>
+            </table></div>
+          </fieldset>
+          <fieldset class="lf">
+            <legend>大会・講義名</legend>
+            <div class="grid">
+              <label>名称:<input type="text" id="m-cnf-name" size="26"></label>
+              <button type="button" id="m-cnf-add" class="mini">追加</button>
+              <button type="button" id="m-cnf-cancel" class="mini hidden">編集をやめる</button>
+              <span class="edit-state hidden" id="m-cnf-editing">編集中</span>
+            </div>
+            <div class="table-wrap short"><table class="tbl" id="m-cnf-table">
+              <thead><tr><th>名称</th><th>使用</th><th>操作</th></tr></thead><tbody></tbody>
+            </table></div>
+          </fieldset>
+        </div>
       </div>
     </section>
 
@@ -332,8 +303,7 @@
     <section class="nb-page hidden" id="page-data">
       <fieldset class="lf">
         <legend>バックアップ（アプリ更新時の引き継ぎ用）</legend>
-        <p class="hint">登録した業績とマスタ（英名を含む）をまとめて JSON ファイルに保存します。
-          アプリを更新したあとにこのファイルを読み込めば、これまでの入力内容をそのまま復元できます。</p>
+        <p class="hint">登録した業績とマスタ（所属の階層・英名を含む）をまとめて JSON ファイルに保存します。</p>
         <div class="btnbar">
           <button type="button" id="d-export" class="primary">JSONファイルに保存</button>
           <span class="vsep"></span>
@@ -344,10 +314,7 @@
           </select></label>
         </div>
       </fieldset>
-      <fieldset class="lf">
-        <legend>登録状況</legend>
-        <div class="stats" id="d-stats"></div>
-      </fieldset>
+      <fieldset class="lf"><legend>登録状況</legend><div class="stats" id="d-stats"></div></fieldset>
       <fieldset class="lf danger-box">
         <legend>データの初期化</legend>
         <p class="hint">この操作は取り消せません。実行前に必ず JSON バックアップを保存してください。</p>

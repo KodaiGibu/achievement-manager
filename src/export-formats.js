@@ -1,20 +1,12 @@
 /**
- * 業績管理アプリ — 追加の出力形式
- *
- *  - BibTeX / RIS（Zotero・EndNote などの文献管理ソフト向け）
- *  - 科研費様式（研究発表欄）
- *  - 年度別集計
- *
- * 著者名は業績の表記言語（resolveLang）に従い、英語表記の業績では英名で出力する。
+ * 業績管理アプリ — 追加の出力形式（BibTeX / RIS / 科研費様式 / 年度別集計）
+ * 著者名は業績の表記言語（resolveLang）に従う。
  */
 import { CATEGORY_MAP, kindOf, findById, groupByCategory } from './model.js';
 import {
-  formatAuthors, formatDate, formatVolume,
-  journalLabel, conferenceLabel, authorName, resolveLang,
+  formatAuthors, formatDate, formatVolume, journalLabel, conferenceLabel, authorName, resolveLang,
 } from './format.js';
 import { doiUrl } from './crossref.js';
-
-// ══════════ BibTeX ══════════
 
 function escBib(s) {
   return String(s ?? '')
@@ -24,10 +16,7 @@ function escBib(s) {
     .replace(/\^/g, '\\textasciicircum{}');
 }
 
-/**
- * 引用キー（著者姓 + 年 + タイトル先頭語）。
- * BibTeX では ASCII が安全なため、英語表記の姓を使い、無ければ item + 年 にする。
- */
+/** 引用キー（英語表記の姓 + 年 + タイトル先頭語・ASCII） */
 export function citationKey(db, a, used = new Set()) {
   const first = (a.authors ?? [])[0];
   const rawName = first ? authorName(db, first, 'en') : '';
@@ -55,36 +44,27 @@ function authorList(db, a) {
   return (a.authors ?? []).map((au) => authorName(db, au, lang)).filter((s) => s !== '');
 }
 
-/** 業績 1 件を BibTeX エントリにする */
 export function toBibtex(db, a, used = new Set()) {
-  const type = bibEntryType(a.categoryId);
-  const key = citationKey(db, a, used);
   const fields = [];
-  const put = (k, v) => {
-    const s = String(v ?? '').trim();
-    if (s !== '') fields.push(`  ${k} = {${escBib(s)}}`);
-  };
+  const put = (k, v) => { const s = String(v ?? '').trim(); if (s !== '') fields.push(`  ${k} = {${escBib(s)}}`); };
+  const key = citationKey(db, a, used);
   put('author', authorList(db, a).join(' and '));
   put('title', a.title);
   if (kindOf(a.categoryId) === 'paper') {
     put('journal', journalLabel(db, a));
     const j = findById(db.masters.journals, a.journalId);
     if (j && String(j.abbr ?? '').trim() !== '') put('shortjournal', j.abbr);
-    put('volume', a.volume);
-    put('number', a.issue);
-    put('pages', a.pages);
+    put('volume', a.volume); put('number', a.issue); put('pages', a.pages);
   } else {
     put('booktitle', conferenceLabel(db, a));
     put('note', [a.presentationNumber ? `No. ${a.presentationNumber}` : '', a.note]
       .filter((s) => String(s ?? '').trim() !== '').join(' '));
     put('address', a.venue);
   }
-  put('year', a.year);
-  put('month', a.month);
-  put('doi', a.doi);
+  put('year', a.year); put('month', a.month); put('doi', a.doi);
   if (String(a.doi ?? '').trim() !== '') put('url', doiUrl(a.doi));
   put('keywords', CATEGORY_MAP[a.categoryId]?.label ?? '');
-  return `@${type}{${key},\n${fields.join(',\n')}\n}`;
+  return `@${bibEntryType(a.categoryId)}{${key},\n${fields.join(',\n')}\n}`;
 }
 
 export function buildBibtex(db, opts = {}) {
@@ -101,8 +81,6 @@ export function buildBibtex(db, opts = {}) {
     + `% Zotero・EndNote などにそのまま読み込めます\n\n${blocks.join('\n')}`;
 }
 
-// ══════════ RIS ══════════
-
 export function risType(categoryId) {
   const kind = kindOf(categoryId);
   if (kind === 'paper') return 'JOUR';
@@ -112,10 +90,7 @@ export function risType(categoryId) {
 
 export function toRis(db, a) {
   const lines = [];
-  const put = (tag, v) => {
-    const s = String(v ?? '').trim();
-    if (s !== '') lines.push(`${tag}  - ${s}`);
-  };
+  const put = (tag, v) => { const s = String(v ?? '').trim(); if (s !== '') lines.push(`${tag}  - ${s}`); };
   lines.push(`TY  - ${risType(a.categoryId)}`);
   authorList(db, a).forEach((n) => put('AU', n));
   put('TI', a.title);
@@ -123,15 +98,12 @@ export function toRis(db, a) {
     put('JO', journalLabel(db, a));
     const j = findById(db.masters.journals, a.journalId);
     if (j && String(j.abbr ?? '').trim() !== '') put('J2', j.abbr);
-    put('VL', a.volume);
-    put('IS', a.issue);
+    put('VL', a.volume); put('IS', a.issue);
     const pg = String(a.pages ?? '').trim();
     const m = pg.match(/^(\d+)\s*[-–—]\s*(\d+)$/);
     if (m) { put('SP', m[1]); put('EP', m[2]); } else put('SP', pg);
   } else {
-    put('T2', conferenceLabel(db, a));
-    put('CY', a.venue);
-    put('M1', a.presentationNumber);
+    put('T2', conferenceLabel(db, a)); put('CY', a.venue); put('M1', a.presentationNumber);
   }
   put('PY', a.year);
   const da = [a.year, a.month, a.day].map((v) => String(v ?? '').trim());
@@ -151,8 +123,6 @@ export function buildRis(db, opts = {}) {
   groupByCategory(items, order).forEach((g) => g.items.forEach((a) => out.push(toRis(db, a))));
   return out.join('\r\n\r\n') + '\r\n';
 }
-
-// ══════════ 科研費様式 ══════════
 
 export const KAKENHI_SECTIONS = [
   { id: 'journal', label: '〔雑誌論文〕', match: (id) => kindOf(id) === 'paper' },
@@ -175,7 +145,6 @@ export function buildKakenhi(db, opts = {}) {
   const { order = 'desc', categoryIds = null, title = null } = opts;
   const items = categoryIds ? db.achievements.filter((a) => categoryIds.includes(a.categoryId)) : db.achievements;
   const out = [title ?? `研究発表（${new Date().getFullYear()}年度 科研費様式）`, ''];
-
   KAKENHI_SECTIONS.forEach((sec) => {
     const list = items.filter((a) => sec.match(a.categoryId));
     if (!list.length) return;
@@ -208,8 +177,6 @@ export function buildKakenhi(db, opts = {}) {
   return out.join('\n');
 }
 
-// ══════════ 年度別集計 ══════════
-
 export function fiscalYear(a) {
   const y = Number(a.year);
   if (!y) return null;
@@ -230,39 +197,33 @@ export function summarizeByYear(db, basis = 'fiscal') {
     rec.byCategory[a.categoryId] = (rec.byCategory[a.categoryId] ?? 0) + 1;
     cats.add(a.categoryId);
   });
-  const rows = [...map.values()].sort((x, y) => x.year - y.year);
-  const categories = Object.keys(CATEGORY_MAP).filter((id) => cats.has(id));
-  return { rows, categories, total: db.achievements.length };
+  return {
+    rows: [...map.values()].sort((x, y) => x.year - y.year),
+    categories: Object.keys(CATEGORY_MAP).filter((id) => cats.has(id)),
+    total: db.achievements.length,
+  };
 }
 
 export function buildYearlyCsv(db, basis = 'fiscal') {
   const { rows, categories } = summarizeByYear(db, basis);
-  const esc = (v) => {
-    const s = String(v ?? '');
-    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
-  const header = [basis === 'fiscal' ? '年度' : '年', ...categories.map((c) => CATEGORY_MAP[c].label), '合計'];
-  const lines = [header.map(esc).join(',')];
+  const esc = (v) => { const s = String(v ?? ''); return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  const lines = [[basis === 'fiscal' ? '年度' : '年', ...categories.map((c) => CATEGORY_MAP[c].label), '合計'].map(esc).join(',')];
   rows.forEach((r) => lines.push([r.year, ...categories.map((c) => r.byCategory[c] ?? 0), r.total].map(esc).join(',')));
-  const totals = categories.map((c) => rows.reduce((s, r) => s + (r.byCategory[c] ?? 0), 0));
-  lines.push(['合計', ...totals, rows.reduce((s, r) => s + r.total, 0)].map(esc).join(','));
+  lines.push(['合計', ...categories.map((c) => rows.reduce((s, r) => s + (r.byCategory[c] ?? 0), 0)),
+    rows.reduce((s, r) => s + r.total, 0)].map(esc).join(','));
   return lines.join('\r\n') + '\r\n';
 }
 
 export function yearlyBar(count, max, width = 20) {
   if (max <= 0) return '';
-  const n = Math.max(1, Math.round((count / max) * width));
-  return '█'.repeat(count > 0 ? n : 0);
+  return '█'.repeat(count > 0 ? Math.max(1, Math.round((count / max) * width)) : 0);
 }
 
 export function exportFileName(kind, d = new Date()) {
   const p2 = (x) => String(x).padStart(2, '0');
   const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}`;
-  const names = {
-    bibtex: `業績目録_${stamp}.bib`,
-    ris: `業績目録_${stamp}.ris`,
-    kakenhi: `科研費様式_研究発表_${stamp}.txt`,
-    yearly: `年度別集計_${stamp}.csv`,
-  };
-  return names[kind] ?? `export_${stamp}.txt`;
+  return {
+    bibtex: `業績目録_${stamp}.bib`, ris: `業績目録_${stamp}.ris`,
+    kakenhi: `科研費様式_研究発表_${stamp}.txt`, yearly: `年度別集計_${stamp}.csv`,
+  }[kind] ?? `export_${stamp}.txt`;
 }
