@@ -5,12 +5,14 @@ import {
   APP_TITLE, CATEGORIES, CATEGORY_MAP, kindOf,
   emptyDb, emptyAchievement, emptyAuthor, newId,
   loadDb, saveDb, upsertMaster, findById, removeMaster, countMasterUsage,
-  addAffiliation, affiliationLabel, sortedAffiliations,
+  addAffiliation, affiliationLabel, sortedAffiliations, findAffiliationByEnglish,
+  findPersonByEnglish, personLabel,
   groupByCategory, summarize, exportJson, importJson, dateKey,
 } from './model.js';
 import {
   buildList, buildCsv, formatItem, formatAuthors, journalLabel, conferenceLabel,
-  defaultTitle, fileName, backupFileName, authorName, authorAffiliation, isSelf,
+  defaultTitle, fileName, backupFileName, authorName, authorAffiliation, affiliationText,
+  isSelf, resolveLang,
 } from './format.js';
 import { fetchByDoi, normalizeDoi } from './crossref.js';
 import {
@@ -18,13 +20,14 @@ import {
 } from './export-formats.js';
 
 const $ = (id) => document.getElementById(id);
+const hasJa = (s) => /[ぁ-んァ-ヶ一-龠々ー]/.test(String(s ?? ''));
+const tr = (v) => String(v ?? '').trim();
 
 const app = {
   db: loadDb(),
-  editingId: null,        // 編集中の業績 ID（null なら新規）
-  /** 入力中の著者: { freeName, affiliationIds: [] } */
+  editingId: null,
+  /** 入力中の著者: { freeName, freeNameEn, affiliationIds: [] } */
   authors: [emptyAuthor()],
-  /** マスタ管理で編集中の項目 ID */
   masterEdit: { aff: null, person: null, jnl: null, cnf: null },
 };
 
@@ -40,6 +43,15 @@ function btn(text, className = 'mini', title = '') {
   b.type = 'button';
   if (title) b.title = title;
   return b;
+}
+function input(className, size, placeholder = '', list = '') {
+  const i = document.createElement('input');
+  i.type = 'text';
+  i.className = className;
+  i.size = size;
+  if (placeholder) i.placeholder = placeholder;
+  if (list) i.setAttribute('list', list);
+  return i;
 }
 
 // ══ ダイアログ・ステータス ══
@@ -124,19 +136,14 @@ document.querySelectorAll('.nb-tabs .nb-tab').forEach((b) => {
 // ══════════ 入力フォーム ══════════
 
 function fillCategorySelects() {
-  const sel = $('f-category');
-  sel.innerHTML = '';
-  CATEGORIES.forEach((c) => {
-    const o = document.createElement('option');
-    o.value = c.id; o.textContent = c.label;
-    sel.appendChild(o);
-  });
-  const ls = $('l-category');
-  ls.innerHTML = '<option value="">すべて</option>';
-  CATEGORIES.forEach((c) => {
-    const o = document.createElement('option');
-    o.value = c.id; o.textContent = c.label;
-    ls.appendChild(o);
+  [['f-category', false], ['l-category', true]].forEach(([id, withAll]) => {
+    const sel = $(id);
+    sel.innerHTML = withAll ? '<option value="">すべて</option>' : '';
+    CATEGORIES.forEach((c) => {
+      const o = document.createElement('option');
+      o.value = c.id; o.textContent = c.label;
+      sel.appendChild(o);
+    });
   });
 }
 
@@ -152,63 +159,64 @@ function applyKind() {
   updatePreview();
 }
 $('f-category').addEventListener('change', applyKind);
+$('f-lang').addEventListener('change', updatePreview);
 
-/** datalist（候補）を最新のマスタで更新する */
+/** datalist（候補）を最新のマスタで更新する。共著者は和文名・英語表記の両方を候補に出す */
 function refreshDatalists() {
-  const set = (id, items) => {
+  const fill = (id, values) => {
     const dl = $(id);
     dl.innerHTML = '';
-    items.forEach((x) => {
+    [...new Set(values.filter((v) => tr(v) !== ''))].forEach((v) => {
       const o = document.createElement('option');
-      o.value = x.name;
+      o.value = v;
       dl.appendChild(o);
     });
   };
-  set('dl-persons', app.db.masters.persons);
-  set('dl-affiliations', sortedAffiliations(app.db));
-  set('dl-journals', app.db.masters.journals);
-  set('dl-conferences', app.db.masters.conferences);
+  const m = app.db.masters;
+  fill('dl-persons', m.persons.flatMap((p) => [p.name, p.nameEn]));
+  fill('dl-affiliations', sortedAffiliations(app.db).map((a) => a.name));
+  fill('dl-affiliations-en', sortedAffiliations(app.db).map((a) => a.nameEn));
+  fill('dl-journals', m.journals.map((j) => j.name));
+  fill('dl-conferences', m.conferences.map((c) => c.name));
 }
 
 // ══ 共著者と所属 ══
 
-/** 氏名から人物マスタを探す */
-function findPerson(name) {
-  const n = String(name ?? '').trim();
-  return app.db.masters.persons.find((p) => p.name === n) ?? null;
+/** 和文名・英語表記のどちらからでも人物を探す */
+function findPerson(text) {
+  const n = tr(text);
+  if (n === '') return null;
+  const ps = app.db.masters.persons;
+  return ps.find((p) => p.name === n) ?? ps.find((p) => tr(p.nameEn) === n)
+    ?? (hasJa(n) ? null : findPersonByEnglish(app.db, n));
 }
-/** 自分の人物マスタを探す（自分の氏名表記のいずれかに一致） */
 function findSelfPerson() {
-  return app.db.masters.persons.find((p) => isSelf(app.db, p.name)) ?? null;
+  return app.db.masters.persons.find((p) => isSelf(app.db, p.name) || isSelf(app.db, p.nameEn)) ?? null;
 }
 
 /**
- * 新しい所属（名称＋略称）を登録して ID を返す。
- * 既存の略称と食い違う場合は、変更するか確認する。
+ * 所属（和文名称・略称・英語名称・英語略称）を登録して ID を返す。
+ * 登録済みの値と食い違う項目があれば、上書きするか確認する。
  */
-async function registerAffiliation(name, shortName) {
+async function registerAffiliation(name, fields) {
   let r;
-  try {
-    r = addAffiliation(app.db, name, shortName);
-  } catch (e) {
-    await showMessage('入力エラー', e.message);
-    return null;
-  }
-  if (r.conflict) {
-    const change = await askYesNo('略称の確認',
-      `「${name}」は略称「${r.conflict}」で登録済みです。\n略称を「${shortName}」に変更しますか？\n`
-      + '（変更すると、この所属を使っているすべての業績の出力に反映されます）');
-    if (change) r = addAffiliation(app.db, name, shortName, { updateShortName: true });
+  try { r = addAffiliation(app.db, name, fields); }
+  catch (e) { await showMessage('入力エラー', e.message); return null; }
+  if (r.conflicts.length) {
+    const lines = r.conflicts.map((c) => `・${c.label}：「${c.current}」→「${c.incoming}」`).join('\n');
+    const change = await askYesNo('登録内容の確認',
+      `「${name || fields.nameEn}」は登録済みです。次の項目が登録内容と異なります。\n${lines}\n\n`
+      + '入力した内容で更新しますか？（この所属を使っているすべての業績の出力に反映されます）');
+    if (change) r = addAffiliation(app.db, name, fields, { updateExisting: true });
   }
   const aff = findById(app.db.masters.affiliations, r.id);
   if (r.created) persist(`所属を登録しました：${affiliationLabel(aff)}`);
-  else if (r.updated) persist(`所属の略称を更新しました：${affiliationLabel(aff)}`);
+  else if (r.updated) persist(`所属を更新しました：${affiliationLabel(aff)}`);
   else setStatus(`登録済みの所属を追加しました：${affiliationLabel(aff)}`);
   refreshDatalists();
   return r.id;
 }
 
-/** 著者行を描画する */
 function renderAuthors() {
   const box = $('f-authors');
   box.innerHTML = '';
@@ -216,42 +224,40 @@ function renderAuthors() {
   updatePreview();
 }
 
-/** 著者 1 名分の行（氏名・所属チップ・所属の追加欄）を組み立てる */
+/** 著者 1 名分の行（氏名・英語表記・所属チップ・所属の追加欄） */
 function buildAuthorRow(au, i) {
   if (!Array.isArray(au.affiliationIds)) au.affiliationIds = [];
   const row = el('div', 'author-row');
 
-  // ── 1段目: 番号・氏名・自分バッジ・並べ替え ──
+  // ── 1段目: 氏名・英語表記 ──
   const head = el('div', 'a-head');
   head.appendChild(el('span', 'a-no', String(i + 1)));
   const nameLabel = el('label', '', '氏名:');
-  const nameInput = document.createElement('input');
-  nameInput.type = 'text';
-  nameInput.className = 'a-name';
-  nameInput.size = 18;
-  nameInput.setAttribute('list', 'dl-persons');
+  const nameInput = input('a-name', 16, '和文名または英語表記', 'dl-persons');
   nameInput.value = au.freeName ?? '';
   nameLabel.appendChild(nameInput);
-  head.appendChild(nameLabel);
+  const enLabel = el('label', '', '英語表記:');
+  const enInput = input('a-name-en', 16, 'Gibu, K.');
+  enInput.value = au.freeNameEn ?? '';
+  enLabel.appendChild(enInput);
   const selfBadge = el('span', 'a-self', '自分');
-  selfBadge.classList.toggle('hidden', !isSelf(app.db, au.freeName));
-  head.appendChild(selfBadge);
+  const isMe = () => isSelf(app.db, au.freeName) || isSelf(app.db, au.freeNameEn);
+  selfBadge.classList.toggle('hidden', !isMe());
   const ops = el('span', 'a-ops');
   const up = btn('↑', 'mini a-up', '上へ');
   const down = btn('↓', 'mini a-down', '下へ');
   const del = btn('×', 'mini danger a-del', 'この著者を削除');
   ops.append(up, down, del);
-  head.appendChild(ops);
+  head.append(nameLabel, enLabel, selfBadge, ops);
   row.appendChild(head);
 
-  // ── 2段目: 選択済みの所属（チップ） ──
+  // ── 2段目: 選択済みの所属 ──
   const affLine = el('div', 'a-affs');
   affLine.appendChild(el('span', 'a-cap', '所属:'));
   const chips = el('span', 'a-chips');
-  const validIds = au.affiliationIds.filter((id) => findById(app.db.masters.affiliations, id));
-  au.affiliationIds = validIds;
-  if (!validIds.length) chips.appendChild(el('span', 'a-none', '（未設定）'));
-  validIds.forEach((id, k) => {
+  au.affiliationIds = au.affiliationIds.filter((id) => findById(app.db.masters.affiliations, id));
+  if (!au.affiliationIds.length) chips.appendChild(el('span', 'a-none', '（未設定）'));
+  au.affiliationIds.forEach((id, k) => {
     const aff = findById(app.db.masters.affiliations, id);
     const chip = el('span', 'aff-chip');
     if (k > 0) {
@@ -263,28 +269,26 @@ function buildAuthorRow(au, i) {
       chip.appendChild(left);
     }
     chip.appendChild(el('span', 'chip-name', aff.name));
-    if (String(aff.shortName ?? '').trim() !== '') chip.appendChild(el('span', 'chip-short', aff.shortName));
+    if (tr(aff.shortName)) chip.appendChild(el('span', 'chip-short', aff.shortName));
+    const en = affiliationText(aff, 'en', true);
+    const hasEn = tr(aff.nameEn) !== '' || tr(aff.shortNameEn) !== '';
+    chip.appendChild(el('span', hasEn ? 'chip-en' : 'chip-en missing', hasEn ? en : '英名未登録'));
     const rm = btn('×', 'chip-btn', 'この所属を外す');
-    rm.addEventListener('click', () => {
-      au.affiliationIds.splice(k, 1);
-      renderAuthors();
-    });
+    rm.addEventListener('click', () => { au.affiliationIds.splice(k, 1); renderAuthors(); });
     chip.appendChild(rm);
     chips.appendChild(chip);
   });
   affLine.appendChild(chips);
   row.appendChild(affLine);
 
-  // ── 3段目: 所属の追加（過去の所属から選択 / 新しい所属を登録） ──
-  const addLine = el('div', 'a-add');
-
-  const pickBox = el('span', 'a-pick');
-  pickBox.appendChild(el('span', 'a-cap', '過去の所属から選択:'));
+  // ── 3段目: 過去の所属から選択 ──
+  const pickLine = el('div', 'a-add');
+  pickLine.appendChild(el('span', 'a-cap', '過去の所属から選択:'));
   const sel = document.createElement('select');
   sel.className = 'a-aff-select';
+  const candidates = sortedAffiliations(app.db).filter((a) => !au.affiliationIds.includes(a.id));
   const opt0 = document.createElement('option');
   opt0.value = '';
-  const candidates = sortedAffiliations(app.db).filter((a) => !au.affiliationIds.includes(a.id));
   opt0.textContent = candidates.length ? '（所属を選ぶ）' : '（登録済みの所属はありません）';
   sel.appendChild(opt0);
   candidates.forEach((a) => {
@@ -294,67 +298,82 @@ function buildAuthorRow(au, i) {
     sel.appendChild(o);
   });
   const pickBtn = btn('追加', 'mini a-pick-btn');
-  pickBox.append(sel, pickBtn);
-  addLine.appendChild(pickBox);
+  pickLine.append(sel, pickBtn);
+  row.appendChild(pickLine);
 
-  const newBox = el('span', 'a-newaff');
-  newBox.appendChild(el('span', 'a-cap', '新しい所属:'));
-  const nName = document.createElement('input');
-  nName.type = 'text';
-  nName.className = 'a-new-name';
-  nName.size = 20;
-  nName.placeholder = '名称（例: 産業技術総合研究所）';
-  nName.setAttribute('list', 'dl-affiliations');
-  const nShort = document.createElement('input');
-  nShort.type = 'text';
-  nShort.className = 'a-new-short';
-  nShort.size = 10;
-  nShort.placeholder = '略称（例: 産総研）';
+  // ── 4段目: 新しい所属（和文・英文）──
+  const newLine = el('div', 'a-add a-newaff');
+  newLine.appendChild(el('span', 'a-cap', '新しい所属:'));
+  const nName = input('a-new-name', 18, '名称（産業技術総合研究所）', 'dl-affiliations');
+  const nShort = input('a-new-short', 8, '略称（産総研）');
+  const nNameEn = input('a-new-name-en', 22, '英語名称', 'dl-affiliations-en');
+  const nShortEn = input('a-new-short-en', 8, '英語略称（AIST）');
   const nBtn = btn('登録して追加', 'mini accent a-new-btn');
-  newBox.append(nName, nShort, nBtn);
-  addLine.appendChild(newBox);
-  row.appendChild(addLine);
+  newLine.append(nName, nShort, nNameEn, nShortEn, nBtn);
+  row.appendChild(newLine);
 
   // ── イベント ──
   nameInput.addEventListener('input', () => {
     au.freeName = nameInput.value;
-    selfBadge.classList.toggle('hidden', !isSelf(app.db, au.freeName));
+    selfBadge.classList.toggle('hidden', !isMe());
     updatePreview();
   });
-  // 氏名を確定したとき、所属が未設定ならその人の既定の所属を入れる
-  nameInput.addEventListener('change', () => {
-    const p = findPerson(nameInput.value);
-    if (p && au.affiliationIds.length === 0 && (p.affiliationIds ?? []).length) {
-      au.affiliationIds = p.affiliationIds.filter((id) => findById(app.db.masters.affiliations, id));
-      renderAuthors();
-      setStatus(`${p.name} の既定の所属を入れました`);
-    }
+  enInput.addEventListener('input', () => {
+    au.freeNameEn = enInput.value;
+    selfBadge.classList.toggle('hidden', !isMe());
+    updatePreview();
   });
+  // 和文名・英語表記のどちらで確定しても、登録済みの人物に紐づける
+  const bindPerson = (value) => {
+    const p = findPerson(value);
+    if (!p) return false;
+    au.freeName = p.name;
+    if (tr(p.nameEn) !== '') au.freeNameEn = p.nameEn;
+    if (au.affiliationIds.length === 0 && (p.affiliationIds ?? []).length) {
+      au.affiliationIds = p.affiliationIds.filter((id) => findById(app.db.masters.affiliations, id));
+    }
+    renderAuthors();
+    setStatus(`登録済みの共著者を選びました：${personLabel(p)}`);
+    return true;
+  };
+  nameInput.addEventListener('change', () => bindPerson(nameInput.value));
+  enInput.addEventListener('change', () => {
+    if (tr(au.freeName) === '') bindPerson(enInput.value);
+  });
+
   const addPicked = () => {
-    if (!sel.value) { setStatus('追加する所属を選んでください', true); return; }
+    if (!sel.value) return;
     if (!au.affiliationIds.includes(sel.value)) au.affiliationIds.push(sel.value);
     renderAuthors();
   };
   pickBtn.addEventListener('click', addPicked);
   sel.addEventListener('change', addPicked);
 
-  // 既存の名称を入力したら登録済みの略称を補う
-  nName.addEventListener('change', () => {
-    const hit = app.db.masters.affiliations.find((a) => a.name === nName.value.trim());
-    if (hit && nShort.value.trim() === '' && String(hit.shortName ?? '').trim() !== '') {
-      nShort.value = hit.shortName;
-    }
-  });
+  // 登録済みの名称（和文・英文）を入力したら残りの項目を補う
+  const fillFrom = (aff) => {
+    if (!aff) return;
+    if (tr(nName.value) === '') nName.value = aff.name;
+    if (tr(nShort.value) === '') nShort.value = aff.shortName ?? '';
+    if (tr(nNameEn.value) === '') nNameEn.value = aff.nameEn ?? '';
+    if (tr(nShortEn.value) === '') nShortEn.value = aff.shortNameEn ?? '';
+  };
+  nName.addEventListener('change', () => fillFrom(app.db.masters.affiliations.find((a) => a.name === tr(nName.value))));
+  nNameEn.addEventListener('change', () => fillFrom(findAffiliationByEnglish(app.db, nNameEn.value)));
+
   const addNew = async () => {
-    const name = nName.value.trim();
-    if (name === '') { await showMessage('入力エラー', '新しい所属の名称を入力してください。'); return; }
-    const id = await registerAffiliation(name, nShort.value.trim());
+    const name = tr(nName.value);
+    const fields = { shortName: tr(nShort.value), nameEn: tr(nNameEn.value), shortNameEn: tr(nShortEn.value) };
+    if (name === '' && fields.nameEn === '') {
+      await showMessage('入力エラー', '新しい所属の名称（または英語名称）を入力してください。');
+      return;
+    }
+    const id = await registerAffiliation(name, fields);
     if (!id) return;
     if (!au.affiliationIds.includes(id)) au.affiliationIds.push(id);
     renderAuthors();
   };
   nBtn.addEventListener('click', addNew);
-  [nName, nShort].forEach((inp) => inp.addEventListener('keydown', (e) => {
+  [nName, nShort, nNameEn, nShortEn].forEach((x) => x.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); addNew(); }
   }));
 
@@ -376,16 +395,14 @@ function buildAuthorRow(au, i) {
   return row;
 }
 
-$('f-add-author').addEventListener('click', () => {
-  app.authors.push(emptyAuthor());
-  renderAuthors();
-});
+$('f-add-author').addEventListener('click', () => { app.authors.push(emptyAuthor()); renderAuthors(); });
 $('f-add-self').addEventListener('click', () => {
   const me = findSelfPerson();
-  const name = me ? me.name : ((app.db.profile.selfNames ?? [])[0] ?? '');
+  const names = app.db.profile.selfNames ?? [];
   app.authors.unshift({
     ...emptyAuthor(),
-    freeName: name,
+    freeName: me ? me.name : (names.find(hasJa) ?? names[0] ?? ''),
+    freeNameEn: me ? (me.nameEn ?? '') : (names.find((n) => !hasJa(n)) ?? ''),
     affiliationIds: me ? (me.affiliationIds ?? []).slice() : [],
   });
   renderAuthors();
@@ -397,65 +414,91 @@ function collectAchievement({ commitMasters = true } = {}) {
   const kind = kindOf(categoryId);
   const a = emptyAchievement(categoryId);
   if (app.editingId) a.id = app.editingId;
+  a.lang = $('f-lang').value;
   const m = app.db.masters;
 
   a.authors = app.authors.map((au) => {
-    const nm = String(au.freeName ?? '').trim();
-    if (nm === '') return null;
+    const nm = tr(au.freeName);
+    const en = tr(au.freeNameEn);
+    const name = nm || en;
+    if (name === '') return null;
     const affIds = (au.affiliationIds ?? []).filter((id) => findById(m.affiliations, id));
-    const personId = commitMasters
-      ? upsertMaster(m.persons, { name: nm, nameEn: '', affiliationIds: affIds.slice() }, 'name', 'per')
-      : (findPerson(nm)?.id ?? '');
-    return { personId, freeName: personId ? '' : nm, affiliationIds: affIds, freeAffiliation: '' };
+    // プレビュー時はマスタを変更せず、入力中の氏名・英語表記をそのまま使う
+    if (!commitMasters) return { personId: '', freeName: name, freeNameEn: en, affiliationIds: affIds, freeAffiliation: '' };
+    const personId = upsertMaster(m.persons, { name, nameEn: en, affiliationIds: affIds.slice() }, 'name', 'per');
+    // 入力欄で英語表記を明示した場合は、それを正として更新する
+    const p = findById(m.persons, personId);
+    if (en !== '' && p.nameEn !== en) p.nameEn = en;
+    return { personId, freeName: '', freeNameEn: '', affiliationIds: affIds, freeAffiliation: '' };
   }).filter(Boolean);
 
   const resolve = (list, value, extra, prefix) => {
-    const v = String(value ?? '').trim();
+    const v = tr(value);
     if (v === '') return '';
     if (commitMasters) return upsertMaster(list, { name: v, ...extra }, 'name', prefix);
     return list.find((x) => x.name === v)?.id ?? '';
   };
 
   if (kind === 'paper') {
-    a.title = $('f-title-paper').value.trim();
-    const jn = $('f-journal').value.trim();
-    a.journalId = resolve(m.journals, jn, { abbr: $('f-journal-abbr').value.trim() }, 'jnl');
+    a.title = tr($('f-title-paper').value);
+    const jn = tr($('f-journal').value);
+    a.journalId = resolve(m.journals, jn, { abbr: tr($('f-journal-abbr').value) }, 'jnl');
     if (!a.journalId) a.freeJournal = jn;
-    a.year = $('f-year-paper').value.trim();
-    a.month = $('f-month-paper').value.trim();
-    a.day = $('f-day-paper').value.trim();
-    a.volume = $('f-volume').value.trim();
-    a.issue = $('f-issue').value.trim();
-    a.pages = $('f-pages').value.trim();
+    a.year = tr($('f-year-paper').value);
+    a.month = tr($('f-month-paper').value);
+    a.day = tr($('f-day-paper').value);
+    a.volume = tr($('f-volume').value);
+    a.issue = tr($('f-issue').value);
+    a.pages = tr($('f-pages').value);
     a.reviewed = $('f-reviewed').checked;
-    a.doi = $('f-doi').value.trim();
+    a.doi = tr($('f-doi').value);
   } else if (kind === 'conference') {
-    a.title = $('f-title-conf').value.trim();
-    const cn = $('f-conference').value.trim();
+    a.title = tr($('f-title-conf').value);
+    const cn = tr($('f-conference').value);
     a.conferenceId = resolve(m.conferences, cn, {}, 'cnf');
     if (!a.conferenceId) a.freeConference = cn;
-    a.year = $('f-year-conf').value.trim();
-    a.month = $('f-month-conf').value.trim();
-    a.day = $('f-day-conf').value.trim();
-    a.presentationNumber = $('f-number').value.trim();
-    a.venue = $('f-venue-conf').value.trim();
+    a.year = tr($('f-year-conf').value);
+    a.month = tr($('f-month-conf').value);
+    a.day = tr($('f-day-conf').value);
+    a.presentationNumber = tr($('f-number').value);
+    a.venue = tr($('f-venue-conf').value);
   } else {
-    a.title = $('f-title-other').value.trim();
-    const cn = $('f-conference-other').value.trim();
+    a.title = tr($('f-title-other').value);
+    const cn = tr($('f-conference-other').value);
     a.conferenceId = resolve(m.conferences, cn, {}, 'cnf');
     if (!a.conferenceId) a.freeConference = cn;
-    a.year = $('f-year-other').value.trim();
-    a.month = $('f-month-other').value.trim();
-    a.day = $('f-day-other').value.trim();
-    a.venue = $('f-venue-other').value.trim();
-    a.note = $('f-note').value.trim();
+    a.year = tr($('f-year-other').value);
+    a.month = tr($('f-month-other').value);
+    a.day = tr($('f-day-other').value);
+    a.venue = tr($('f-venue-other').value);
+    a.note = tr($('f-note').value);
   }
   return a;
 }
 
-/** 入力内容のプレビューを更新する（マスタは変更しない） */
+/** プレビューと、英語表記時の英名未登録の警告を更新する */
 function updatePreview() {
   const a = collectAchievement({ commitMasters: false });
+  const lang = resolveLang(app.db, a);
+  const mode = $('f-lang').value;
+  $('f-lang-state').textContent = `→ ${lang === 'en' ? '英語表記' : '日本語表記'}で出力${mode === 'auto' ? '（自動）' : ''}`;
+  $('f-lang-state').classList.toggle('en', lang === 'en');
+
+  const warn = $('f-lang-warn');
+  if (lang === 'en') {
+    const noName = app.authors.filter((au) => tr(au.freeName) && !tr(au.freeNameEn)).map((au) => au.freeName);
+    const noAff = [...new Set(app.authors.flatMap((au) => au.affiliationIds ?? []))]
+      .map((id) => findById(app.db.masters.affiliations, id))
+      .filter((x) => x && !tr(x.nameEn) && !tr(x.shortNameEn)).map((x) => x.name);
+    const msgs = [];
+    if (noName.length) msgs.push(`英語表記が未入力の著者：${noName.join('、')}`);
+    if (noAff.length) msgs.push(`英語名称が未登録の所属：${noAff.join('、')}（マスタ管理で登録できます）`);
+    warn.textContent = msgs.length ? `${msgs.join(' ／ ')} — 未登録の分は和文で出力されます。` : '';
+    warn.classList.toggle('hidden', msgs.length === 0);
+  } else {
+    warn.classList.add('hidden');
+  }
+
   const html = formatItem(app.db, a, 'html');
   $('f-preview').innerHTML = html.trim() === '' ? '（入力すると、ここに業績リストでの表示が出ます）' : html;
 }
@@ -466,10 +509,9 @@ const FORM_FIELDS = ['f-title-paper', 'f-journal', 'f-journal-abbr', 'f-year-pap
   'f-venue-other', 'f-note'];
 FORM_FIELDS.forEach((id) => $(id).addEventListener('input', updatePreview));
 
-// ジャーナル名を確定したら、登録済みの略称を補う
 $('f-journal').addEventListener('change', () => {
-  const j = app.db.masters.journals.find((x) => x.name === $('f-journal').value.trim());
-  if (j && $('f-journal-abbr').value.trim() === '' && String(j.abbr ?? '').trim() !== '') {
+  const j = app.db.masters.journals.find((x) => x.name === tr($('f-journal').value));
+  if (j && tr($('f-journal-abbr').value) === '' && tr(j.abbr) !== '') {
     $('f-journal-abbr').value = j.abbr;
     updatePreview();
   }
@@ -479,6 +521,7 @@ function clearForm() {
   const cat = $('f-category').value;
   FORM_FIELDS.forEach((id) => { $(id).value = ''; });
   $('f-doi-fetch').value = '';
+  $('f-lang').value = 'auto';
   setDoiState('');
   app.authors = [emptyAuthor()];
   app.editingId = null;
@@ -494,7 +537,7 @@ $('f-save').addEventListener('click', async () => {
   const preview = collectAchievement({ commitMasters: false });
   if (!preview.authors.length) { await showMessage('入力エラー', '著者を1名以上入力してください。'); return; }
   if (preview.title === '') { await showMessage('入力エラー', 'タイトルを入力してください。'); return; }
-  if (String(preview.year).trim() === '') { await showMessage('入力エラー', '年を入力してください。'); return; }
+  if (tr(preview.year) === '') { await showMessage('入力エラー', '年を入力してください。'); return; }
 
   const a = collectAchievement({ commitMasters: true });
   if (app.editingId) {
@@ -517,8 +560,16 @@ function setDoiState(text, kind = '') {
   e.className = `doi-state${kind ? ` ${kind}` : ''}`;
 }
 
+/** CrossRef の英語の所属名を、登録済みの所属に紐づける（無ければ英語名称として登録） */
+function bindCrossrefAffiliation(text) {
+  const hit = findAffiliationByEnglish(app.db, text);
+  if (hit) return { id: hit.id, created: false };
+  const r = addAffiliation(app.db, text, { nameEn: text });
+  return { id: r.id, created: r.created };
+}
+
 $('f-doi-go').addEventListener('click', async () => {
-  const raw = $('f-doi-fetch').value.trim();
+  const raw = tr($('f-doi-fetch').value);
   if (raw === '') { await showMessage('入力エラー', 'DOI を入力してください。'); return; }
   let doi;
   try { doi = normalizeDoi(raw); }
@@ -527,7 +578,6 @@ $('f-doi-go').addEventListener('click', async () => {
   const b = $('f-doi-go');
   b.disabled = true;
   setDoiState('CrossRef に問い合わせ中…', 'busy');
-  setStatus(`DOI を照会しています: ${doi}`);
   let meta;
   try {
     meta = await fetchByDoi(doi);
@@ -555,70 +605,80 @@ $('f-doi-go').addEventListener('click', async () => {
   if (meta.pages) $('f-pages').value = meta.pages;
   $('f-doi').value = meta.doi || doi;
 
+  let matched = 0;
+  let newAff = 0;
   if ($('f-doi-authors').checked && meta.authors.length) {
-    let registered = 0;
     app.authors = meta.authors.map((x) => {
+      const p = findPersonByEnglish(app.db, x.name);
       const ids = [];
       if (x.affiliation) {
-        const r = addAffiliation(app.db, x.affiliation, '');
-        if (r.created) registered += 1;
+        const r = bindCrossrefAffiliation(x.affiliation);
+        if (r.created) newAff += 1;
         ids.push(r.id);
       }
-      // 氏名が登録済みで所属が無ければ、既定の所属を使う
-      const p = findPerson(x.name);
-      if (!ids.length && p) ids.push(...(p.affiliationIds ?? []));
-      return { ...emptyAuthor(), freeName: x.name, affiliationIds: ids };
+      if (p) {
+        matched += 1;
+        if (!ids.length) ids.push(...(p.affiliationIds ?? []));
+        return { ...emptyAuthor(), freeName: p.name, freeNameEn: p.nameEn || x.name, affiliationIds: ids };
+      }
+      return { ...emptyAuthor(), freeName: x.name, freeNameEn: x.name, affiliationIds: ids };
     });
-    if (registered) persist(`CrossRef の所属 ${registered} 件を記憶しました`);
+    if (newAff) persist();
     refreshDatalists();
     renderAuthors();
   }
   updatePreview();
-  const parts = [`${meta.authors.length}名の著者`, meta.journal || '誌名なし', meta.year || '年不明'];
-  setDoiState(`取得しました（${parts.join(' / ')}）`, 'ok');
+  setDoiState(`取得しました（著者${meta.authors.length}名のうち登録済み${matched}名に紐づけ${newAff ? `・所属${newAff}件を記憶` : ''}）`, 'ok');
   setStatus(`DOI から書誌情報を取得しました: ${meta.title || doi}`);
 });
 $('f-doi-fetch').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); $('f-doi-go').click(); }
 });
 
-// サンプル入力
+// サンプル入力（国際学会・英語表記）
 $('f-demo').addEventListener('click', () => {
-  $('f-category').value = 'conf_dom_oral';
+  $('f-category').value = 'conf_intl_oral';
+  $('f-lang').value = 'auto';
   applyKind();
-  const aist = addAffiliation(app.db, '産業技術総合研究所', '産総研').id;
-  const ut = addAffiliation(app.db, '東京大学', '東京大').id;
+  const aist = addAffiliation(app.db, '産業技術総合研究所', {
+    shortName: '産総研', nameEn: 'National Institute of Advanced Industrial Science and Technology', shortNameEn: 'AIST',
+  }).id;
+  const ut = addAffiliation(app.db, '東京大学', {
+    shortName: '東京大', nameEn: 'The University of Tokyo', shortNameEn: 'UTokyo',
+  }).id;
   persist();
   refreshDatalists();
   app.authors = [
-    { ...emptyAuthor(), freeName: (app.db.profile.selfNames ?? [])[0] ?? '儀武滉大', affiliationIds: [ut, aist] },
-    { ...emptyAuthor(), freeName: '井口亮', affiliationIds: [aist] },
+    { ...emptyAuthor(), freeName: '儀武滉大', freeNameEn: 'Gibu, K.', affiliationIds: [ut, aist] },
+    { ...emptyAuthor(), freeName: '井口亮', freeNameEn: 'Iguchi, A.', affiliationIds: [aist] },
   ];
   renderAuthors();
-  $('f-title-conf').value = '南西諸島における造礁サンゴの細菌叢解析';
-  $('f-conference').value = '日本生態学会第72回全国大会';
-  $('f-year-conf').value = '2025';
-  $('f-month-conf').value = '3';
-  $('f-day-conf').value = '15';
-  $('f-number').value = 'I01-01';
+  $('f-title-conf').value = 'Microbiome Analysis of Reef-Building Corals in the Ryukyu Islands';
+  $('f-conference').value = '1st Asia-Pacific Biodiversity Joint Conference';
+  $('f-year-conf').value = '2024';
+  $('f-month-conf').value = '10';
+  $('f-day-conf').value = '23';
+  $('f-number').value = '23-VI-4';
   updatePreview();
-  setStatus('サンプルを入力しました（所属「産業技術総合研究所／産総研」「東京大学／東京大」を記憶しました）');
+  setStatus('サンプルを入力しました（著者・所属の英名を使って英語表記で出力されます）');
 });
 
 // ══════════ 業績一覧 ══════════
 
 function filteredAchievements() {
   const cat = $('l-category').value;
-  const kw = $('l-search').value.trim().toLowerCase();
+  const kw = tr($('l-search').value).toLowerCase();
   const order = $('l-order').value;
   let list = app.db.achievements.slice();
   if (cat) list = list.filter((a) => a.categoryId === cat);
   if (kw) {
     list = list.filter((a) => {
-      const authors = (a.authors ?? []).map((au) => `${authorName(app.db, au)} ${authorAffiliation(app.db, au, false)}`).join(' ');
-      const src = [a.title, authors, journalLabel(app.db, a), conferenceLabel(app.db, a), a.note]
-        .join(' ').toLowerCase();
-      return src.includes(kw);
+      const authors = (a.authors ?? []).map((au) => [
+        authorName(app.db, au, 'ja'), authorName(app.db, au, 'en'),
+        authorAffiliation(app.db, au, false, 'ja'), authorAffiliation(app.db, au, false, 'en'),
+      ].join(' ')).join(' ');
+      return [a.title, authors, journalLabel(app.db, a), conferenceLabel(app.db, a), a.note]
+        .join(' ').toLowerCase().includes(kw);
     });
   }
   const sign = order === 'desc' ? -1 : 1;
@@ -632,18 +692,20 @@ function renderList() {
   const tbody = $('l-table').querySelector('tbody');
   tbody.innerHTML = '';
   list.forEach((a, i) => {
-    const tr = document.createElement('tr');
-    const d = [a.year, a.month, a.day].filter((v) => String(v).trim() !== '').join('/');
+    const row = document.createElement('tr');
+    const lang = resolveLang(app.db, a);
+    const d = [a.year, a.month, a.day].filter((v) => tr(v) !== '').join('/');
     const src = kindOf(a.categoryId) === 'paper' ? journalLabel(app.db, a) : conferenceLabel(app.db, a);
-    const authors = formatAuthors(app.db, a, { withAffiliation: false }).parts.map((p) => p.name).join('・');
-    [String(i + 1), CATEGORY_MAP[a.categoryId]?.label ?? a.categoryId, d, a.title, src, authors]
+    const authors = formatAuthors(app.db, a, { lang, withAffiliation: false }).parts.map((p) => p.name)
+      .join(lang === 'en' ? ', ' : '・');
+    [String(i + 1), CATEGORY_MAP[a.categoryId]?.label ?? a.categoryId,
+      `${lang === 'en' ? '英' : '和'}${a.lang === 'auto' ? '（自動）' : ''}`, d, a.title, src, authors]
       .forEach((v, ci) => {
-        const td = document.createElement('td');
-        td.textContent = v;
+        const td = el('td', '', v);
         if (ci === 0) td.className = 'num';
-        else if (ci === 3) td.className = 'left w-title';
-        else if (ci !== 2) td.className = 'left';
-        tr.appendChild(td);
+        else if (ci === 4) td.className = 'left w-title';
+        else if (ci === 1 || ci >= 5) td.className = 'left';
+        row.appendChild(td);
       });
     const ops = el('td', 'ops');
     const ed = btn('編集', 'mini');
@@ -660,8 +722,8 @@ function renderList() {
       persist('業績を削除しました'); renderList();
     });
     ops.append(ed, cp, dl);
-    tr.appendChild(ops);
-    tbody.appendChild(tr);
+    row.appendChild(ops);
+    tbody.appendChild(row);
   });
 }
 ['l-category', 'l-search', 'l-order'].forEach((id) => {
@@ -676,12 +738,14 @@ function loadIntoForm(id) {
   app.editingId = a.id;
   $('f-editing').classList.remove('hidden');
   $('f-category').value = a.categoryId;
+  $('f-lang').value = a.lang ?? 'auto';
   applyKind();
   app.authors = (a.authors ?? []).map((au) => {
     const p = findById(app.db.masters.persons, au.personId);
     return {
       ...emptyAuthor(),
       freeName: p ? p.name : (au.freeName ?? ''),
+      freeNameEn: p ? (p.nameEn ?? '') : (au.freeNameEn ?? ''),
       affiliationIds: (au.affiliationIds ?? []).slice(),
     };
   });
@@ -733,23 +797,15 @@ function selectedCategories() {
   return [...$('o-categories').querySelectorAll('input:checked')].map((c) => c.value);
 }
 function outputOptions() {
-  return {
-    order: $('o-order').value,
-    title: $('o-title').value.trim() || defaultTitle(),
-    categoryIds: selectedCategories(),
-  };
+  return { order: $('o-order').value, title: tr($('o-title').value) || defaultTitle(), categoryIds: selectedCategories() };
 }
 function renderOutput() {
   renderOutputCategories();
-  if ($('o-title').value.trim() === '') $('o-title').value = defaultTitle();
+  if (tr($('o-title').value) === '') $('o-title').value = defaultTitle();
   const opts = outputOptions();
-  const groups = groupByCategory(
-    app.db.achievements.filter((a) => opts.categoryIds.includes(a.categoryId)), opts.order,
-  );
-  const body = groups.map((g) => {
-    const lis = g.items.map((a) => `<li>${formatItem(app.db, a, 'html')}</li>`).join('');
-    return `<h3>${g.category.label}</h3><ul>${lis}</ul>`;
-  }).join('');
+  const groups = groupByCategory(app.db.achievements.filter((a) => opts.categoryIds.includes(a.categoryId)), opts.order);
+  const body = groups.map((g) => `<h3>${g.category.label}</h3><ul>${
+    g.items.map((a) => `<li>${formatItem(app.db, a, 'html')}</li>`).join('')}</ul>`).join('');
   const n = groups.reduce((s, g) => s + g.items.length, 0);
   $('o-preview').innerHTML = n === 0
     ? '<p class="empty">出力できる業績がありません。区分の選択を確認してください。</p>'
@@ -763,7 +819,6 @@ $('o-all-on').addEventListener('click', () => {
 $('o-all-off').addEventListener('click', () => {
   $('o-categories').querySelectorAll('input').forEach((c) => { c.checked = false; }); renderOutput();
 });
-
 $('o-html').addEventListener('click', () => {
   downloadFile(fileName('html'), buildList(app.db, 'html', outputOptions()), 'text/html;charset=utf-8');
   setStatus('HTML を保存しました（Word に貼り付けると書式が保たれます）');
@@ -778,16 +833,15 @@ $('o-txt').addEventListener('click', () => {
 });
 $('o-csv').addEventListener('click', () => {
   downloadFile(fileName('csv'), '\uFEFF' + buildCsv(app.db, outputOptions()), 'text/csv;charset=utf-8');
-  setStatus('CSV を保存しました（Excel で開けます）');
+  setStatus('CSV を保存しました（和文・英文の著者と所属を含みます）');
 });
 $('o-bib').addEventListener('click', () => {
   downloadFile(exportFileName('bibtex'), buildBibtex(app.db, outputOptions()), 'application/x-bibtex;charset=utf-8');
-  setStatus('BibTeX を保存しました（Zotero・EndNote に読み込めます）');
+  setStatus('BibTeX を保存しました');
 });
 $('o-ris').addEventListener('click', () => {
-  downloadFile(exportFileName('ris'), buildRis(app.db, outputOptions()),
-    'application/x-research-info-systems;charset=utf-8');
-  setStatus('RIS を保存しました（Zotero・EndNote・Mendeley に読み込めます）');
+  downloadFile(exportFileName('ris'), buildRis(app.db, outputOptions()), 'application/x-research-info-systems;charset=utf-8');
+  setStatus('RIS を保存しました');
 });
 $('o-kakenhi').addEventListener('click', () => {
   downloadFile(exportFileName('kakenhi'), buildKakenhi(app.db, outputOptions()), 'text/plain;charset=utf-8');
@@ -826,51 +880,36 @@ function renderYearly() {
   const noYear = app.db.achievements.length - withYear;
   const peak = rows.reduce((b, r) => (r.total > (b?.total ?? 0) ? r : b), null);
   const avg = rows.length ? (withYear / rows.length).toFixed(1) : '0';
-
   $('y-summary').innerHTML = rows.length === 0
     ? '<div class="stat-line">集計できる業績がありません。</div>'
     : `<div class="stat-line">対象 <b>${withYear}</b> 件 / ${rows.length} ${unit}
          （${rows[0].year}${unit} 〜 ${rows[rows.length - 1].year}${unit}）</div>
-       <div class="stat-line">1${unit}あたり平均 <b>${avg}</b> 件
-         ／ 最多は <b>${peak.year}${unit}</b> の <b>${peak.total}</b> 件
+       <div class="stat-line">1${unit}あたり平均 <b>${avg}</b> 件 ／ 最多は <b>${peak.year}${unit}</b> の <b>${peak.total}</b> 件
          ${noYear > 0 ? `／ 年が未入力で集計対象外: ${noYear} 件` : ''}</div>`;
-
   const max = rows.reduce((mx, r) => Math.max(mx, r.total), 0);
   $('y-chart').innerHTML = rows.length === 0 ? '<span class="hint">データがありません。</span>'
-    : rows.map((r) => `
-      <div class="ybar-row">
-        <span class="ybar-year">${r.year}${unit}</span>
+    : rows.map((r) => `<div class="ybar-row"><span class="ybar-year">${r.year}${unit}</span>
         <span class="ybar-track"><span class="ybar-fill" style="width:${max ? (r.total / max) * 100 : 0}%"></span></span>
-        <span class="ybar-num">${r.total}</span>
-      </div>`).join('');
+        <span class="ybar-num">${r.total}</span></div>`).join('');
 
   const thead = $('y-table').querySelector('thead');
   const tbody = $('y-table').querySelector('tbody');
   thead.innerHTML = '';
   tbody.innerHTML = '';
   if (!rows.length) return;
-
   const trh = document.createElement('tr');
-  [unit, ...categories.map((c) => CATEGORY_MAP[c].label), '合計'].forEach((h, i) => {
-    const th = el('th', i === 0 ? 'w-year' : '', h);
-    trh.appendChild(th);
-  });
+  [unit, ...categories.map((c) => CATEGORY_MAP[c].label), '合計'].forEach((h, i) => trh.appendChild(el('th', i === 0 ? 'w-year' : '', h)));
   thead.appendChild(trh);
   rows.forEach((r) => {
-    const tr = document.createElement('tr');
-    tr.appendChild(el('td', 'left strong', `${r.year}${unit}`));
-    categories.forEach((c) => {
-      const n = r.byCategory[c] ?? 0;
-      tr.appendChild(el('td', '', n === 0 ? '' : String(n)));
-    });
-    tr.appendChild(el('td', 'total', String(r.total)));
-    tbody.appendChild(tr);
+    const row = document.createElement('tr');
+    row.appendChild(el('td', 'left strong', `${r.year}${unit}`));
+    categories.forEach((c) => row.appendChild(el('td', '', r.byCategory[c] ? String(r.byCategory[c]) : '')));
+    row.appendChild(el('td', 'total', String(r.total)));
+    tbody.appendChild(row);
   });
   const trf = el('tr', 'sum-row');
   trf.appendChild(el('td', 'left strong', '合計'));
-  categories.forEach((c) => {
-    trf.appendChild(el('td', '', String(rows.reduce((s, r) => s + (r.byCategory[c] ?? 0), 0))));
-  });
+  categories.forEach((c) => trf.appendChild(el('td', '', String(rows.reduce((s, r) => s + (r.byCategory[c] ?? 0), 0)))));
   trf.appendChild(el('td', 'total', String(withYear)));
   tbody.appendChild(trf);
 }
@@ -885,7 +924,12 @@ $('y-csv').addEventListener('click', () => {
 
 // ══════════ マスタ管理 ══════════
 
-/** マスタ編集フォームの状態（追加 / 編集中）を切り替える */
+const MASTER_FIELDS = {
+  aff: ['m-aff-name', 'm-aff-short', 'm-aff-name-en', 'm-aff-short-en'],
+  person: ['m-person-name', 'm-person-en'],
+  jnl: ['m-jnl-name', 'm-jnl-abbr'],
+  cnf: ['m-cnf-name'],
+};
 function setMasterEdit(kind, id) {
   app.masterEdit[kind] = id;
   const editing = !!id;
@@ -893,12 +937,6 @@ function setMasterEdit(kind, id) {
   $(`m-${kind}-cancel`).classList.toggle('hidden', !editing);
   $(`m-${kind}-editing`).classList.toggle('hidden', !editing);
 }
-const MASTER_FIELDS = {
-  aff: ['m-aff-name', 'm-aff-short'],
-  person: ['m-person-name', 'm-person-en'],
-  jnl: ['m-jnl-name', 'm-jnl-abbr'],
-  cnf: ['m-cnf-name'],
-};
 function resetMasterForm(kind) {
   MASTER_FIELDS[kind].forEach((id) => { $(id).value = ''; });
   if (kind === 'person') [...$('m-person-aff').options].forEach((o) => { o.selected = false; });
@@ -910,8 +948,10 @@ Object.keys(MASTER_FIELDS).forEach((kind) => {
 
 function renderMasters() {
   $('m-selfnames').value = (app.db.profile.selfNames ?? []).join('\n');
+  const s = summarize(app.db);
+  $('m-aff-en-count').textContent = `英名登録 ${s.affiliationsWithEn} / ${s.affiliations}`;
+  $('m-person-en-count').textContent = `英語表記登録 ${s.personsWithEn} / ${s.persons}`;
 
-  // 共著者の既定所属（複数選択）
   const affSel = $('m-person-aff');
   const keep = new Set([...affSel.options].filter((o) => o.selected).map((o) => o.value));
   affSel.innerHTML = '';
@@ -926,14 +966,18 @@ function renderMasters() {
     const tbody = $(tblId).querySelector('tbody');
     tbody.innerHTML = '';
     rows.forEach((cells) => {
-      const tr = document.createElement('tr');
+      const row = document.createElement('tr');
       cells.forEach((c, i) => {
         const td = document.createElement('td');
-        if (c instanceof Object && c.nodeType) td.appendChild(c);
-        else { td.textContent = c; td.className = i === cells.length - 2 ? 'num' : 'left'; }
-        tr.appendChild(td);
+        if (c && typeof c === 'object' && c.nodeType) td.appendChild(c);
+        else {
+          td.textContent = c;
+          td.className = i === cells.length - 2 ? 'num' : 'left';
+          if (c === '') td.classList.add('blank');
+        }
+        row.appendChild(td);
       });
-      tbody.appendChild(tr);
+      tbody.appendChild(row);
     });
   };
   const opsCell = (type, kind, item, onEdit) => {
@@ -957,9 +1001,10 @@ function renderMasters() {
   const usage = (type, id) => String(countMasterUsage(app.db, type, id));
 
   table('m-aff-table', sortedAffiliations(app.db).map((a) => [
-    a.name, a.shortName ?? '', usage('affiliations', a.id),
+    a.name, a.shortName ?? '', a.nameEn ?? '', a.shortNameEn ?? '', usage('affiliations', a.id),
     opsCell('affiliations', 'aff', a, () => {
       $('m-aff-name').value = a.name; $('m-aff-short').value = a.shortName ?? '';
+      $('m-aff-name-en').value = a.nameEn ?? ''; $('m-aff-short-en').value = a.shortNameEn ?? '';
     })]));
   table('m-person-table', app.db.masters.persons.map((p) => {
     const affs = (p.affiliationIds ?? []).map((id) => findById(app.db.masters.affiliations, id))
@@ -985,14 +1030,17 @@ $('m-save-self').addEventListener('click', () => {
   renderAuthors();
 });
 
-/** 名称の重複（別 ID で同名）を確認する */
 function duplicateName(list, name, exceptId) {
   return list.some((x) => x.name.trim() === name && x.id !== exceptId);
 }
 
 $('m-aff-add').addEventListener('click', async () => {
-  const name = $('m-aff-name').value.trim();
-  const short = $('m-aff-short').value.trim();
+  const name = tr($('m-aff-name').value);
+  const fields = {
+    shortName: tr($('m-aff-short').value),
+    nameEn: tr($('m-aff-name-en').value),
+    shortNameEn: tr($('m-aff-short-en').value),
+  };
   if (name === '') { await showMessage('入力エラー', '所属の名称を入力してください。'); return; }
   const editId = app.masterEdit.aff;
   if (editId) {
@@ -1000,39 +1048,38 @@ $('m-aff-add').addEventListener('click', async () => {
       await showMessage('入力エラー', `「${name}」は既に登録されています。`); return;
     }
     const a = findById(app.db.masters.affiliations, editId);
-    a.name = name; a.shortName = short;
+    Object.assign(a, { name, ...fields });
     persist(`所属を更新しました：${affiliationLabel(a)}`);
   } else {
-    const r = addAffiliation(app.db, name, short, { updateShortName: true });
+    const r = addAffiliation(app.db, name, fields, { updateExisting: true });
     const a = findById(app.db.masters.affiliations, r.id);
-    persist(r.created ? `所属を登録しました：${affiliationLabel(a)}` : `所属の略称を更新しました：${affiliationLabel(a)}`);
+    persist(r.created ? `所属を登録しました：${affiliationLabel(a)}` : `所属を更新しました：${affiliationLabel(a)}`);
   }
   resetMasterForm('aff');
   renderMasters(); refreshDatalists();
 });
 $('m-person-add').addEventListener('click', async () => {
-  const name = $('m-person-name').value.trim();
+  const name = tr($('m-person-name').value);
   if (name === '') { await showMessage('入力エラー', '氏名を入力してください。'); return; }
   const affIds = [...$('m-person-aff').options].filter((o) => o.selected).map((o) => o.value);
-  const en = $('m-person-en').value.trim();
+  const en = tr($('m-person-en').value);
   const editId = app.masterEdit.person;
   const list = app.db.masters.persons;
   if (editId) {
     if (duplicateName(list, name, editId)) { await showMessage('入力エラー', `「${name}」は既に登録されています。`); return; }
-    const p = findById(list, editId);
-    Object.assign(p, { name, nameEn: en, affiliationIds: affIds });
+    Object.assign(findById(list, editId), { name, nameEn: en, affiliationIds: affIds });
   } else {
     const hit = list.find((p) => p.name === name);
     if (hit) Object.assign(hit, { nameEn: en, affiliationIds: affIds });
     else list.push({ id: newId('per'), name, nameEn: en, affiliationIds: affIds });
   }
-  persist(`共著者を保存しました：${name}`);
+  persist(`共著者を保存しました：${en ? `${name} / ${en}` : name}`);
   resetMasterForm('person');
   renderMasters(); refreshDatalists();
 });
 $('m-jnl-add').addEventListener('click', async () => {
-  const name = $('m-jnl-name').value.trim();
-  const abbr = $('m-jnl-abbr').value.trim();
+  const name = tr($('m-jnl-name').value);
+  const abbr = tr($('m-jnl-abbr').value);
   if (name === '') { await showMessage('入力エラー', 'ジャーナル名を入力してください。'); return; }
   const editId = app.masterEdit.jnl;
   const list = app.db.masters.journals;
@@ -1049,7 +1096,7 @@ $('m-jnl-add').addEventListener('click', async () => {
   renderMasters(); refreshDatalists();
 });
 $('m-cnf-add').addEventListener('click', async () => {
-  const name = $('m-cnf-name').value.trim();
+  const name = tr($('m-cnf-name').value);
   if (name === '') { await showMessage('入力エラー', '名称を入力してください。'); return; }
   const editId = app.masterEdit.cnf;
   const list = app.db.masters.conferences;
@@ -1071,9 +1118,9 @@ function renderStats() {
   const rows = CATEGORIES.filter((c) => s.byCategory[c.id])
     .map((c) => `<tr><td class="left">${c.label}</td><td class="num">${s.byCategory[c.id]}</td></tr>`).join('');
   $('d-stats').innerHTML = `
-    <div class="stat-line">業績 <b>${s.total}</b> 件
-      ${s.minYear ? `（${s.minYear}年〜${s.maxYear}年）` : ''}</div>
-    <div class="stat-line">マスタ: 共著者 <b>${s.persons}</b> / 所属 <b>${s.affiliations}</b>
+    <div class="stat-line">業績 <b>${s.total}</b> 件 ${s.minYear ? `（${s.minYear}年〜${s.maxYear}年）` : ''}</div>
+    <div class="stat-line">マスタ: 共著者 <b>${s.persons}</b>（英語表記 ${s.personsWithEn}）
+      / 所属 <b>${s.affiliations}</b>（英語名称 ${s.affiliationsWithEn}）
       / ジャーナル <b>${s.journals}</b> / 大会 <b>${s.conferences}</b></div>
     <div class="stat-line">最終保存: ${app.db.updatedAt ? new Date(app.db.updatedAt).toLocaleString('ja-JP') : '—'}</div>
     ${rows ? `<table class="tbl mini-tbl"><thead><tr><th>区分</th><th>件数</th></tr></thead><tbody>${rows}</tbody></table>` : ''}`;
@@ -1093,10 +1140,9 @@ $('d-import').addEventListener('change', async (e) => {
     app.db = db;
     persist(`読み込みました（${mode === 'replace' ? '置き換え' : `${added} 件を追加`}）`);
     refreshDatalists(); renderStats(); renderMasters(); renderList(); renderAuthors();
-    await showMessage('読み込み完了',
-      mode === 'replace'
-        ? `データを置き換えました。業績 ${app.db.achievements.length} 件。`
-        : `${added} 件を追加しました。現在の業績は ${app.db.achievements.length} 件です。`);
+    await showMessage('読み込み完了', mode === 'replace'
+      ? `データを置き換えました。業績 ${app.db.achievements.length} 件。`
+      : `${added} 件を追加しました。現在の業績は ${app.db.achievements.length} 件です。`);
   } catch (err) {
     await showMessage('読み込みエラー', err.message);
   } finally {
@@ -1104,8 +1150,7 @@ $('d-import').addEventListener('change', async (e) => {
   }
 });
 $('d-reset').addEventListener('click', async () => {
-  if (!await askYesNo('初期化の確認',
-    'すべての業績とマスタを削除します。この操作は取り消せません。実行しますか？')) return;
+  if (!await askYesNo('初期化の確認', 'すべての業績とマスタを削除します。この操作は取り消せません。実行しますか？')) return;
   app.db = emptyDb();
   persist('データを初期化しました');
   refreshDatalists(); renderStats(); renderMasters(); renderList(); clearForm();

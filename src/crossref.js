@@ -7,10 +7,7 @@
 
 export const CROSSREF_BASE = 'https://api.crossref.org/works/';
 
-/**
- * 入力された DOI 文字列を正規化する。
- * URL 形式（https://doi.org/10.xxxx/yyyy）や "doi:" 接頭辞も受け付ける。
- */
+/** DOI 文字列を正規化する（URL 形式や "doi:" 接頭辞も受け付ける） */
 export function normalizeDoi(input) {
   let s = String(input ?? '').trim();
   if (s === '') throw new Error('DOI を入力してください。');
@@ -36,42 +33,29 @@ export function mapCrossrefMessage(msg) {
   if (!msg || typeof msg !== 'object') throw new Error('書誌情報を読み取れませんでした。');
 
   const firstOf = (v) => (Array.isArray(v) ? (v[0] ?? '') : (v ?? ''));
-  const title = String(firstOf(msg.title)).trim();
-  const journal = String(firstOf(msg['container-title'])).trim();
-  const journalAbbr = String(firstOf(msg['short-container-title'])).trim();
-
-  // 発行日は published-print / published-online / issued の順で探す
   const dateParts = msg['published-print']?.['date-parts']?.[0]
     ?? msg['published-online']?.['date-parts']?.[0]
     ?? msg.issued?.['date-parts']?.[0]
     ?? [];
   const [year = '', month = '', day = ''] = dateParts.map((n) => (n == null ? '' : String(n)));
 
-  // ページが無い場合は論文番号（article-number）を使う
-  const pages = String(msg.page ?? msg['article-number'] ?? '').trim();
-
   const authors = (msg.author ?? []).map((a) => {
     const family = String(a.family ?? '').trim();
     const given = String(a.given ?? '').trim();
     const name = family && given ? `${family}, ${given}` : (family || given || String(a.name ?? '').trim());
-    return {
-      name,
-      family,
-      given,
-      affiliation: String(a.affiliation?.[0]?.name ?? '').trim(),
-    };
+    return { name, family, given, affiliation: String(a.affiliation?.[0]?.name ?? '').trim() };
   }).filter((a) => a.name !== '');
 
   return {
-    title,
-    journal,
-    journalAbbr,
+    title: String(firstOf(msg.title)).trim(),
+    journal: String(firstOf(msg['container-title'])).trim(),
+    journalAbbr: String(firstOf(msg['short-container-title'])).trim(),
     year,
     month,
     day,
     volume: String(msg.volume ?? '').trim(),
     issue: String(msg.issue ?? '').trim(),
-    pages,
+    pages: String(msg.page ?? msg['article-number'] ?? '').trim(),
     doi: String(msg.DOI ?? '').trim(),
     publisher: String(msg.publisher ?? '').trim(),
     type: String(msg.type ?? '').trim(),
@@ -79,10 +63,7 @@ export function mapCrossrefMessage(msg) {
   };
 }
 
-/**
- * DOI から書誌情報を取得する。
- * @param {{mailto?:string, fetchImpl?:Function, signal?:AbortSignal}} opts
- */
+/** DOI から書誌情報を取得する */
 export async function fetchByDoi(doiInput, opts = {}) {
   const doi = normalizeDoi(doiInput);
   const fetchImpl = opts.fetchImpl ?? (typeof fetch !== 'undefined' ? fetch : null);

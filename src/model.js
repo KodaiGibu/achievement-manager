@@ -6,14 +6,14 @@
  */
 
 export const APP_TITLE = '業績管理アプリ';
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 export const STORAGE_KEY = 'achievement_db_v1';
 
 // ══ 業績区分 ══
 
 /**
  * kind: 入力フォームの種類（paper / conference / other）
- * label: 出力時の見出し
+ * scope: international の区分は既定で英語表記になる
  */
 export const CATEGORIES = [
   { id: 'journal_reviewed', kind: 'paper', label: '学術雑誌等に発表した論文［査読有］', reviewed: true },
@@ -36,19 +36,26 @@ export function kindOf(categoryId) {
   return CATEGORY_MAP[categoryId]?.kind ?? 'other';
 }
 
+/** 表記言語の選択肢 */
+export const LANG_OPTIONS = [
+  { value: 'auto', label: '自動判定' },
+  { value: 'ja', label: '日本語表記' },
+  { value: 'en', label: '英語表記' },
+];
+
 // ══ 既定のデータベース ══
 
 export function emptyDb() {
   return {
     schemaVersion: SCHEMA_VERSION,
     profile: {
-      // 出力時に太字＋下線を付ける自分の表記（複数登録可）
-      selfNames: ['儀武滉大', 'Gibu, K.', 'Gibu K', 'Kodai Gibu', '儀武 滉大'],
+      // 出力時に太字＋下線を付ける自分の表記（和文・英文の両方を登録）
+      selfNames: ['儀武滉大', '儀武 滉大', 'Gibu, K.', 'Gibu K', 'Kodai Gibu', 'Gibu, Kodai'],
     },
     masters: {
       /** {id, name, nameEn, affiliationIds:[]} */
       persons: [],
-      /** {id, name, shortName} */
+      /** {id, name, shortName, nameEn, shortNameEn} */
       affiliations: [],
       /** {id, name, abbr} */
       journals: [],
@@ -70,18 +77,19 @@ export function newId(prefix = 'id') {
 // ══ 業績レコードの雛形 ══
 
 /**
- * 共著者エントリ: { personId, freeName, affiliationIds: [], freeAffiliation }
+ * 共著者エントリ: { personId, freeName, freeNameEn, affiliationIds: [], freeAffiliation }
  *  - affiliationIds: 所属マスタの ID の配列（並び順がそのまま出力順）
  *  - freeAffiliation: 旧バージョンの「・」区切り文字列（移行処理でマスタへ変換される）
  */
 export function emptyAuthor() {
-  return { personId: '', freeName: '', affiliationIds: [], freeAffiliation: '' };
+  return { personId: '', freeName: '', freeNameEn: '', affiliationIds: [], freeAffiliation: '' };
 }
 
 export function emptyAchievement(categoryId = 'journal_reviewed') {
   return {
     id: newId('ach'),
     categoryId,
+    lang: 'auto',            // 表記言語: auto / ja / en
     authors: [emptyAuthor()],
     // 論文
     title: '',
@@ -131,6 +139,7 @@ export function saveDb(db) {
 /**
  * 旧バージョンのデータを現行スキーマへ変換する。
  *  v1 → v2: 共著者の freeAffiliation（「・」区切り文字列）を所属マスタへ登録し、ID 参照に置き換える
+ *  v2 → v3: 所属に英語名称・英語略称、業績に表記言語（lang）を追加
  */
 export function migrate(data) {
   const base = emptyDb();
@@ -148,6 +157,7 @@ export function migrate(data) {
   }));
   db.masters.affiliations = (db.masters.affiliations ?? []).map((a) => ({
     id: a.id ?? newId('aff'), name: a.name ?? '', shortName: a.shortName ?? '',
+    nameEn: a.nameEn ?? '', shortNameEn: a.shortNameEn ?? '',
   }));
   db.masters.journals = (db.masters.journals ?? []).map((j) => ({
     id: j.id ?? newId('jnl'), name: j.name ?? '', abbr: j.abbr ?? '',
@@ -155,9 +165,9 @@ export function migrate(data) {
   db.masters.conferences = (db.masters.conferences ?? []).map((c) => ({
     id: c.id ?? newId('cnf'), name: c.name ?? '',
   }));
-  // 欠けているフィールドを補完し、旧形式の所属文字列をマスタへ移す
   db.achievements = db.achievements.map((a) => {
     const rec = { ...emptyAchievement(a.categoryId), ...a };
+    if (!['auto', 'ja', 'en'].includes(rec.lang)) rec.lang = 'auto';
     rec.authors = (rec.authors ?? []).map((au) => resolveLegacyAffiliations(db, { ...emptyAuthor(), ...au }));
     return rec;
   });
@@ -167,18 +177,16 @@ export function migrate(data) {
 
 // ══ マスタ操作 ══
 
-/** 名称からマスタを検索し、無ければ追加して ID を返す（記憶機能の中核） */
+const isBlank = (v) => (Array.isArray(v) ? v.length === 0 : String(v ?? '').trim() === '');
+
+/** 名称からマスタを検索し、無ければ追加して ID を返す（空欄の項目は補完する） */
 export function upsertMaster(list, fields, keyField = 'name', prefix = 'm') {
   const key = String(fields[keyField] ?? '').trim();
   if (key === '') return '';
   const hit = list.find((x) => String(x[keyField]).trim() === key);
   if (hit) {
-    // 既存項目で空欄の情報（略称など）があれば補完する
     Object.entries(fields).forEach(([k, v]) => {
-      if (k === keyField) return;
-      const incomingEmpty = Array.isArray(v) ? v.length === 0 : String(v ?? '').trim() === '';
-      const currentEmpty = Array.isArray(hit[k]) ? hit[k].length === 0 : String(hit[k] ?? '').trim() === '';
-      if (!incomingEmpty && currentEmpty) hit[k] = v;
+      if (k !== keyField && !isBlank(v) && isBlank(hit[k])) hit[k] = v;
     });
     return hit.id;
   }
@@ -191,62 +199,80 @@ export function findById(list, id) {
   return list.find((x) => x.id === id) ?? null;
 }
 
-// ══ 所属の登録 ══
+// ══ 所属の登録（和文名称・略称 ＋ 英語名称・略称）══
+
+const AFF_FIELDS = ['shortName', 'nameEn', 'shortNameEn'];
+const AFF_LABEL = { shortName: '略称', nameEn: '英語名称', shortNameEn: '英語略称' };
 
 /**
- * 所属を名称と略称の組で登録する。
- *  - 同じ名称が既にあれば、その項目を使う（重複登録しない）
- *  - 略称が入力され、既存の略称が空なら補完する
- *  - 略称が入力され、既存の略称と異なる場合は updateShortName=true のときだけ更新する
- * @returns {{id:string, created:boolean, updated:boolean, conflict:string}} conflict は既存の略称（食い違い時）
+ * 所属を登録する。
+ *  - 和文名称（name）をキーに重複を防ぐ。英語名称だけが一致する既存項目もその所属とみなす
+ *  - 既存項目で空欄の略称・英語名称・英語略称は補完する
+ *  - 既に値があり入力値と異なる項目は conflicts に返し、updateExisting=true のときだけ上書きする
+ * @param {{shortName?, nameEn?, shortNameEn?}} fields
+ * @returns {{id, created, updated, conflicts:{field,label,current,incoming}[]}}
  */
-export function addAffiliation(db, name, shortName = '', { updateShortName = false } = {}) {
+export function addAffiliation(db, name, fields = {}, { updateExisting = false } = {}) {
+  // 旧呼び出し addAffiliation(db, name, '略称') との互換
+  const f = typeof fields === 'string' ? { shortName: fields } : (fields ?? {});
   const n = String(name ?? '').trim();
-  const s = String(shortName ?? '').trim();
-  if (n === '') throw new Error('所属の名称を入力してください。');
+  const incoming = Object.fromEntries(AFF_FIELDS.map((k) => [k, String(f[k] ?? '').trim()]));
+  if (n === '' && incoming.nameEn === '') throw new Error('所属の名称を入力してください。');
+
   const list = db.masters.affiliations;
-  const hit = list.find((a) => a.name.trim() === n);
+  const hit = (n !== '' ? list.find((a) => a.name.trim() === n) : null)
+    ?? (incoming.nameEn !== '' ? findAffiliationByEnglish(db, incoming.nameEn) : null);
+
   if (!hit) {
-    const item = { id: newId('aff'), name: n, shortName: s };
+    const item = { id: newId('aff'), name: n || incoming.nameEn, ...incoming };
     list.push(item);
-    return { id: item.id, created: true, updated: false, conflict: '' };
+    return { id: item.id, created: true, updated: false, conflicts: [] };
   }
-  const current = String(hit.shortName ?? '').trim();
-  if (s === '' || s === current) return { id: hit.id, created: false, updated: false, conflict: '' };
-  if (current === '') {
-    hit.shortName = s;
-    return { id: hit.id, created: false, updated: true, conflict: '' };
-  }
-  if (updateShortName) {
-    hit.shortName = s;
-    return { id: hit.id, created: false, updated: true, conflict: '' };
-  }
-  return { id: hit.id, created: false, updated: false, conflict: current };
+  let updated = false;
+  const conflicts = [];
+  AFF_FIELDS.forEach((k) => {
+    const cur = String(hit[k] ?? '').trim();
+    const inc = incoming[k];
+    if (inc === '' || inc === cur) return;
+    if (cur === '' || updateExisting) { hit[k] = inc; updated = true; return; }
+    conflicts.push({ field: k, label: AFF_LABEL[k], current: cur, incoming: inc });
+  });
+  return { id: hit.id, created: false, updated, conflicts };
 }
 
-/** 所属の表示ラベル（名称（略称）） */
+/** 英語名称・英語略称（または和文名称）が一致する所属を探す（大文字小文字・空白を無視） */
+export function findAffiliationByEnglish(db, text) {
+  const norm = (s) => String(s ?? '').toLowerCase().replace(/[\s.,]+/g, '');
+  const t = norm(text);
+  if (t === '') return null;
+  return db.masters.affiliations.find((a) => [a.nameEn, a.shortNameEn, a.name].some((v) => norm(v) === t)) ?? null;
+}
+
+/** 所属の表示ラベル: 名称（略称） / English Name (Abbr) */
 export function affiliationLabel(aff) {
   if (!aff) return '';
   const s = String(aff.shortName ?? '').trim();
-  return s ? `${aff.name}（${s}）` : aff.name;
+  const ja = s ? `${aff.name}（${s}）` : aff.name;
+  const en = String(aff.nameEn ?? '').trim();
+  const se = String(aff.shortNameEn ?? '').trim();
+  if (en === '' && se === '') return ja;
+  return `${ja} / ${en || se}${en && se ? ` (${se})` : ''}`;
 }
 
-/** 所属マスタを名称順（五十音・アルファベット）に並べた一覧 */
+/** 所属マスタを名称順に並べた一覧 */
 export function sortedAffiliations(db) {
   return db.masters.affiliations.slice().sort((a, b) => a.name.localeCompare(b.name, 'ja'));
 }
 
-/**
- * 旧形式の所属文字列（「A・B」）を所属マスタへ登録し、affiliationIds へ移す。
- * 既に ID がある場合はその後ろに追加し、重複は除く。
- */
+/** 旧形式の所属文字列（「A・B」）を所属マスタへ登録し、affiliationIds へ移す */
 export function resolveLegacyAffiliations(db, author) {
   const au = { ...emptyAuthor(), ...author };
   const ids = Array.isArray(au.affiliationIds) ? au.affiliationIds.slice() : [];
   const free = String(au.freeAffiliation ?? '').trim();
   if (free !== '') {
     free.split(/[・,、]/).map((x) => x.trim()).filter(Boolean).forEach((name) => {
-      const id = upsertMaster(db.masters.affiliations, { name, shortName: '' }, 'name', 'aff');
+      const id = upsertMaster(db.masters.affiliations,
+        { name, shortName: '', nameEn: '', shortNameEn: '' }, 'name', 'aff');
       if (id && !ids.includes(id)) ids.push(id);
     });
   }
@@ -254,6 +280,54 @@ export function resolveLegacyAffiliations(db, author) {
   au.freeAffiliation = '';
   return au;
 }
+
+// ══ 人物の英語名 ══
+
+/** 英語名の比較用キー（姓 + 名の頭文字） */
+function englishKey(family, given) {
+  const f = String(family ?? '').toLowerCase().replace(/[^a-z]/g, '');
+  const g = String(given ?? '').toLowerCase().replace(/[^a-z]/g, '');
+  return f ? `${f}|${g.slice(0, 1)}` : '';
+}
+
+/** "Gibu, Kodai" / "Gibu, K." / "Kodai Gibu" を {family, given} に分解する */
+export function splitEnglishName(text) {
+  const s = String(text ?? '').trim();
+  if (s === '') return { family: '', given: '' };
+  if (s.includes(',')) {
+    const [family, given] = s.split(',').map((x) => x.trim());
+    return { family, given: given ?? '' };
+  }
+  const parts = s.split(/\s+/);
+  if (parts.length === 1) return { family: parts[0], given: '' };
+  return { family: parts[parts.length - 1], given: parts.slice(0, -1).join(' ') };
+}
+
+/**
+ * 英語名から登録済みの人物を探す。
+ * "Gibu, Kodai" と "Gibu, K." と "Kodai Gibu" を同一人物とみなす（姓＋名の頭文字で照合）。
+ */
+export function findPersonByEnglish(db, text) {
+  const { family, given } = splitEnglishName(text);
+  const key = englishKey(family, given);
+  if (key === '') return null;
+  return db.masters.persons.find((p) => {
+    const cands = [p.nameEn, p.name].filter((v) => String(v ?? '').trim() !== '');
+    return cands.some((v) => {
+      const s = splitEnglishName(v);
+      return englishKey(s.family, s.given) === key;
+    });
+  }) ?? null;
+}
+
+/** 人物の表示ラベル（氏名 / English） */
+export function personLabel(p) {
+  if (!p) return '';
+  const en = String(p.nameEn ?? '').trim();
+  return en ? `${p.name} / ${en}` : p.name;
+}
+
+// ══ 削除と使用件数 ══
 
 /** マスタ項目を削除する。使用中の業績があれば削除せず件数を返す */
 export function removeMaster(db, type, id) {
@@ -282,7 +356,6 @@ export function countMasterUsage(db, type, id) {
 
 // ══ 並べ替え ══
 
-/** 発表日（年・月・日）を比較用の数値に変換する */
 export function dateKey(a) {
   const y = Number(a.year) || 0;
   const m = Number(a.month) || 0;
@@ -309,9 +382,7 @@ export function groupByCategory(achievements, order = 'asc') {
 
 export function summarize(db) {
   const byCategory = {};
-  db.achievements.forEach((a) => {
-    byCategory[a.categoryId] = (byCategory[a.categoryId] ?? 0) + 1;
-  });
+  db.achievements.forEach((a) => { byCategory[a.categoryId] = (byCategory[a.categoryId] ?? 0) + 1; });
   const years = db.achievements.map((a) => Number(a.year)).filter((y) => y > 0);
   return {
     total: db.achievements.length,
@@ -319,7 +390,9 @@ export function summarize(db) {
     minYear: years.length ? Math.min(...years) : null,
     maxYear: years.length ? Math.max(...years) : null,
     persons: db.masters.persons.length,
+    personsWithEn: db.masters.persons.filter((p) => String(p.nameEn ?? '').trim() !== '').length,
     affiliations: db.masters.affiliations.length,
+    affiliationsWithEn: db.masters.affiliations.filter((a) => String(a.nameEn ?? '').trim() !== '').length,
     journals: db.masters.journals.length,
     conferences: db.masters.conferences.length,
   };
@@ -327,7 +400,6 @@ export function summarize(db) {
 
 // ══ エクスポート / インポート ══
 
-/** バックアップ用 JSON 文字列 */
 export function exportJson(db) {
   return JSON.stringify({ ...db, exportedAt: new Date().toISOString() }, null, 2);
 }
@@ -347,9 +419,7 @@ export function importJson(text, mode = 'replace', current = null) {
   if (mode === 'replace' || !current) return { db: incoming, added: incoming.achievements.length };
 
   const db = migrate(current);
-  // マスタは名称一致でまとめ、ID の対応表を作る
   const idMap = { persons: {}, affiliations: {}, journals: {}, conferences: {} };
-  // 所属を先に処理し、人物の既定所属を新しい ID へ置き換える
   ['affiliations', 'journals', 'conferences'].forEach((type) => {
     incoming.masters[type].forEach((item) => {
       const { id, ...fields } = item;
@@ -361,7 +431,6 @@ export function importJson(text, mode = 'replace', current = null) {
     fields.affiliationIds = (fields.affiliationIds ?? []).map((x) => idMap.affiliations[x]).filter(Boolean);
     idMap.persons[id] = upsertMaster(db.masters.persons, fields, 'name', 'per');
   });
-  // 業績を取り込む（同一内容の重複は除外）
   const seen = new Set(db.achievements.map(signature));
   let added = 0;
   incoming.achievements.forEach((a) => {

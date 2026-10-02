@@ -4,17 +4,18 @@
  *  - BibTeX / RIS（Zotero・EndNote などの文献管理ソフト向け）
  *  - 科研費様式（研究発表欄）
  *  - 年度別集計
+ *
+ * 著者名は業績の表記言語（resolveLang）に従い、英語表記の業績では英名で出力する。
  */
 import { CATEGORY_MAP, kindOf, findById, groupByCategory } from './model.js';
 import {
-  formatAuthors, formatDateJa, formatVolume,
-  journalLabel, conferenceLabel, authorName,
+  formatAuthors, formatDate, formatVolume,
+  journalLabel, conferenceLabel, authorName, resolveLang,
 } from './format.js';
 import { doiUrl } from './crossref.js';
 
 // ══════════ BibTeX ══════════
 
-/** BibTeX で特殊な意味を持つ文字を退避する */
 function escBib(s) {
   return String(s ?? '')
     .replace(/[\\]/g, '\\textbackslash{}')
@@ -24,22 +25,16 @@ function escBib(s) {
 }
 
 /**
- * 引用キー（著者姓 + 年 + タイトル先頭語）を作る。
- * BibTeX のキーは ASCII が安全なため、英語表記があればそれを優先し、
- * 日本語しか無い場合は item + 年 のキーにフォールバックする。
+ * 引用キー（著者姓 + 年 + タイトル先頭語）。
+ * BibTeX では ASCII が安全なため、英語表記の姓を使い、無ければ item + 年 にする。
  */
 export function citationKey(db, a, used = new Set()) {
   const first = (a.authors ?? [])[0];
-  const p = first ? findById(db.masters.persons, first.personId) : null;
-  const enName = p && String(p.nameEn ?? '').trim() !== '' ? p.nameEn.trim() : '';
-  const rawName = enName || (first ? authorName(db, first) : '');
+  const rawName = first ? authorName(db, first, 'en') : '';
   const asciiName = rawName.split(/[,\s]/)[0].replace(/[^A-Za-z0-9]/g, '');
-
   const year = String(a.year ?? '').trim() || 'nd';
-  const title = String(a.title ?? '').trim();
-  const asciiWord = (title.split(/\s+/).find((w) => /[A-Za-z]/.test(w)) ?? '')
+  const asciiWord = (String(a.title ?? '').trim().split(/\s+/).find((w) => /[A-Za-z]/.test(w)) ?? '')
     .replace(/[^A-Za-z0-9]/g, '').slice(0, 12);
-
   const base = asciiName !== '' ? `${asciiName}${year}${asciiWord}` : `item${year}`;
   let key = base;
   let n = 1;
@@ -48,7 +43,6 @@ export function citationKey(db, a, used = new Set()) {
   return key;
 }
 
-/** BibTeX のエントリ種別を決める */
 export function bibEntryType(categoryId) {
   const kind = kindOf(categoryId);
   if (kind === 'paper') return 'article';
@@ -56,8 +50,9 @@ export function bibEntryType(categoryId) {
   return 'misc';
 }
 
-function bibAuthors(db, a) {
-  return (a.authors ?? []).map((au) => authorName(db, au)).filter((s) => s !== '').join(' and ');
+function authorList(db, a) {
+  const lang = resolveLang(db, a);
+  return (a.authors ?? []).map((au) => authorName(db, au, lang)).filter((s) => s !== '');
 }
 
 /** 業績 1 件を BibTeX エントリにする */
@@ -69,8 +64,7 @@ export function toBibtex(db, a, used = new Set()) {
     const s = String(v ?? '').trim();
     if (s !== '') fields.push(`  ${k} = {${escBib(s)}}`);
   };
-
-  put('author', bibAuthors(db, a));
+  put('author', authorList(db, a).join(' and '));
   put('title', a.title);
   if (kindOf(a.categoryId) === 'paper') {
     put('journal', journalLabel(db, a));
@@ -81,7 +75,7 @@ export function toBibtex(db, a, used = new Set()) {
     put('pages', a.pages);
   } else {
     put('booktitle', conferenceLabel(db, a));
-    put('note', [a.presentationNumber ? `発表番号${a.presentationNumber}` : '', a.note]
+    put('note', [a.presentationNumber ? `No. ${a.presentationNumber}` : '', a.note]
       .filter((s) => String(s ?? '').trim() !== '').join(' '));
     put('address', a.venue);
   }
@@ -90,20 +84,15 @@ export function toBibtex(db, a, used = new Set()) {
   put('doi', a.doi);
   if (String(a.doi ?? '').trim() !== '') put('url', doiUrl(a.doi));
   put('keywords', CATEGORY_MAP[a.categoryId]?.label ?? '');
-
   return `@${type}{${key},\n${fields.join(',\n')}\n}`;
 }
 
-/** 業績一覧を BibTeX ファイルの内容にする */
 export function buildBibtex(db, opts = {}) {
   const { order = 'asc', categoryIds = null } = opts;
-  const items = categoryIds
-    ? db.achievements.filter((a) => categoryIds.includes(a.categoryId))
-    : db.achievements;
-  const groups = groupByCategory(items, order);
+  const items = categoryIds ? db.achievements.filter((a) => categoryIds.includes(a.categoryId)) : db.achievements;
   const used = new Set();
   const blocks = [];
-  groups.forEach((g) => {
+  groupByCategory(items, order).forEach((g) => {
     blocks.push(`% ${g.category.label}`);
     g.items.forEach((a) => blocks.push(toBibtex(db, a, used)));
     blocks.push('');
@@ -114,7 +103,6 @@ export function buildBibtex(db, opts = {}) {
 
 // ══════════ RIS ══════════
 
-/** RIS のタグ種別 */
 export function risType(categoryId) {
   const kind = kindOf(categoryId);
   if (kind === 'paper') return 'JOUR';
@@ -122,7 +110,6 @@ export function risType(categoryId) {
   return 'GEN';
 }
 
-/** 業績 1 件を RIS レコードにする */
 export function toRis(db, a) {
   const lines = [];
   const put = (tag, v) => {
@@ -130,7 +117,7 @@ export function toRis(db, a) {
     if (s !== '') lines.push(`${tag}  - ${s}`);
   };
   lines.push(`TY  - ${risType(a.categoryId)}`);
-  (a.authors ?? []).forEach((au) => put('AU', authorName(db, au)));
+  authorList(db, a).forEach((n) => put('AU', n));
   put('TI', a.title);
   if (kindOf(a.categoryId) === 'paper') {
     put('JO', journalLabel(db, a));
@@ -157,28 +144,22 @@ export function toRis(db, a) {
   return lines.join('\r\n');
 }
 
-/** 業績一覧を RIS ファイルの内容にする */
 export function buildRis(db, opts = {}) {
   const { order = 'asc', categoryIds = null } = opts;
-  const items = categoryIds
-    ? db.achievements.filter((a) => categoryIds.includes(a.categoryId))
-    : db.achievements;
-  const groups = groupByCategory(items, order);
+  const items = categoryIds ? db.achievements.filter((a) => categoryIds.includes(a.categoryId)) : db.achievements;
   const out = [];
-  groups.forEach((g) => g.items.forEach((a) => out.push(toRis(db, a))));
+  groupByCategory(items, order).forEach((g) => g.items.forEach((a) => out.push(toRis(db, a))));
   return out.join('\r\n\r\n') + '\r\n';
 }
 
 // ══════════ 科研費様式 ══════════
 
-/** 科研費（研究発表欄）の区分 */
 export const KAKENHI_SECTIONS = [
   { id: 'journal', label: '〔雑誌論文〕', match: (id) => kindOf(id) === 'paper' },
   { id: 'presentation', label: '〔学会発表〕', match: (id) => kindOf(id) === 'conference' },
   { id: 'others', label: '〔その他〕', match: (id) => kindOf(id) === 'other' },
 ];
 
-/** 査読の有無・国際/国内・招待講演の別を判定する */
 export function kakenhiFlags(a) {
   const cat = CATEGORY_MAP[a.categoryId] ?? {};
   const kind = kindOf(a.categoryId);
@@ -190,29 +171,23 @@ export function kakenhiFlags(a) {
   };
 }
 
-/** 科研費様式のテキストを生成する */
 export function buildKakenhi(db, opts = {}) {
   const { order = 'desc', categoryIds = null, title = null } = opts;
-  const items = categoryIds
-    ? db.achievements.filter((a) => categoryIds.includes(a.categoryId))
-    : db.achievements;
-
-  const head = title ?? `研究発表（${new Date().getFullYear()}年度 科研費様式）`;
-  const out = [head, ''];
+  const items = categoryIds ? db.achievements.filter((a) => categoryIds.includes(a.categoryId)) : db.achievements;
+  const out = [title ?? `研究発表（${new Date().getFullYear()}年度 科研費様式）`, ''];
 
   KAKENHI_SECTIONS.forEach((sec) => {
     const list = items.filter((a) => sec.match(a.categoryId));
     if (!list.length) return;
     const sign = order === 'desc' ? -1 : 1;
     list.sort((x, y) => sign * ((Number(x.year) || 0) - (Number(y.year) || 0)));
-
-    out.push(`${sec.label}　計${list.length}件`);
-    out.push('');
+    out.push(`${sec.label}　計${list.length}件`, '');
     list.forEach((a, i) => {
-      const authors = formatAuthors(db, a, { withAffiliation: false }).parts.map((p) => p.name).join('、');
+      const lang = resolveLang(db, a);
+      const authors = formatAuthors(db, a, { lang, withAffiliation: false }).parts
+        .map((p) => p.name).join(lang === 'en' ? ', ' : '、');
       const f = kakenhiFlags(a);
-      out.push(`${i + 1}．${authors}`);
-      out.push(`　　${a.title}`);
+      out.push(`${i + 1}．${authors}`, `　　${a.title}`);
       if (sec.id === 'journal') {
         out.push(`　　${journalLabel(db, a)}　${formatVolume(a)}　${a.year}年　${a.pages}`);
         const extra = [`査読の有無：${f.reviewed}`, `国際共著：${f.international}`];
@@ -220,10 +195,10 @@ export function buildKakenhi(db, opts = {}) {
         if (f.openAccess) extra.push(`オープンアクセス：${f.openAccess}`);
         out.push(`　　${extra.join('／')}`);
       } else if (sec.id === 'presentation') {
-        out.push(`　　${conferenceLabel(db, a)}　${formatDateJa(a)}`);
+        out.push(`　　${conferenceLabel(db, a)}　${formatDate(a, lang)}`);
         out.push(`　　国際学会：${f.international}／招待講演：${f.invited}`);
       } else {
-        const line = [conferenceLabel(db, a), formatDateJa(a), a.venue, a.note]
+        const line = [conferenceLabel(db, a), formatDate(a, lang), a.venue, a.note]
           .map((s) => String(s ?? '').trim()).filter((s) => s !== '').join('　');
         if (line !== '') out.push(`　　${line}`);
       }
@@ -235,7 +210,6 @@ export function buildKakenhi(db, opts = {}) {
 
 // ══════════ 年度別集計 ══════════
 
-/** 年度を求める（4月1日〜翌3月31日）。月が無ければ暦年を年度とみなす */
 export function fiscalYear(a) {
   const y = Number(a.year);
   if (!y) return null;
@@ -244,7 +218,6 @@ export function fiscalYear(a) {
   return m >= 4 ? y : y - 1;
 }
 
-/** 年度別（または暦年別）の集計を返す */
 export function summarizeByYear(db, basis = 'fiscal') {
   const map = new Map();
   const cats = new Set();
@@ -262,7 +235,6 @@ export function summarizeByYear(db, basis = 'fiscal') {
   return { rows, categories, total: db.achievements.length };
 }
 
-/** 年度別集計を CSV にする */
 export function buildYearlyCsv(db, basis = 'fiscal') {
   const { rows, categories } = summarizeByYear(db, basis);
   const esc = (v) => {
@@ -271,22 +243,17 @@ export function buildYearlyCsv(db, basis = 'fiscal') {
   };
   const header = [basis === 'fiscal' ? '年度' : '年', ...categories.map((c) => CATEGORY_MAP[c].label), '合計'];
   const lines = [header.map(esc).join(',')];
-  rows.forEach((r) => {
-    lines.push([r.year, ...categories.map((c) => r.byCategory[c] ?? 0), r.total].map(esc).join(','));
-  });
+  rows.forEach((r) => lines.push([r.year, ...categories.map((c) => r.byCategory[c] ?? 0), r.total].map(esc).join(',')));
   const totals = categories.map((c) => rows.reduce((s, r) => s + (r.byCategory[c] ?? 0), 0));
   lines.push(['合計', ...totals, rows.reduce((s, r) => s + r.total, 0)].map(esc).join(','));
   return lines.join('\r\n') + '\r\n';
 }
 
-/** 簡易バー（文字列） */
 export function yearlyBar(count, max, width = 20) {
   if (max <= 0) return '';
   const n = Math.max(1, Math.round((count / max) * width));
   return '█'.repeat(count > 0 ? n : 0);
 }
-
-// ══════════ ファイル名 ══════════
 
 export function exportFileName(kind, d = new Date()) {
   const p2 = (x) => String(x).padStart(2, '0');
